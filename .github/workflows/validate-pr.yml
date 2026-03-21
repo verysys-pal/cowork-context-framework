@@ -1,0 +1,30 @@
+name: Validate PR
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'frameworks/**'
+      - 'scripts/**'
+      - 'VERSION'
+      - 'CHANGELOG.md'
+      - 'README.md'
+      - 'DESIGN.md'
+
+jobs:
+  validate:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Fetch tags
+        shell: pwsh
+        run: git fetch --force --tags
+
+      - name: Verify release metadata
+        shell: pwsh
+        run: |
+          $version = (Get-Content VERSION -Raw).Trim()
+          ./scripts/release.ps1 verify -Version $version
