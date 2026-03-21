@@ -1,0 +1,127 @@
+# Coding Convention
+
+> 코드 작성 규칙 — AI가 생성하는 코드와 Human이 작성하는 코드가 동일한 스타일을 유지하도록
+> 명시적인 규칙을 정의한다.
+
+---
+
+## 사용 방법
+
+1. **기술스택 확정 시**: `03_design_artifacts/tech_stack.md`에 기술이 확정되면, AI가 이 문서의 언어/프레임워크별 섹션을 자동으로 구성한다.
+   - 확정된 기술에 해당하는 컨벤션 섹션만 존재한다.
+   - 프로젝트에서 사용하지 않는 기술의 컨벤션은 포함하지 않는다.
+   - 기존에 없는 기술이 선정되면 AI가 모범 사례 기반으로 초안을 제안한다.
+2. **AI 자동 적용**: `CLAUDE.md` 또는 `copilot-instructions.md`에서 이 파일을 참조하므로,
+   세션 시작 후 AI가 자동으로 해당 컨벤션을 따른다.
+3. **추가/수정**: 팀 규칙에 맞게 각 섹션을 자유롭게 수정한다.
+
+---
+
+## 공통 규칙 (모든 언어)
+
+| 항목 | 규칙 |
+|------|------|
+| 파일 인코딩 | UTF-8 |
+| 줄 끝 | LF (Windows 프로젝트는 CRLF) |
+| 후행 공백 | 제거 |
+| 최종 개행 | 파일 끝 개행 1개 |
+| 대화 언어 | 한국어 |
+| 코드 / 커밋 언어 | 영문 |
+
+### 주석 규칙 (공통)
+
+| 항목 | 규칙 |
+|------|------|
+| 공개 API | 반드시 문서 주석 작성 |
+| 복잡한 로직 | Why 중심 주석 (What은 코드가 설명) |
+| TODO | `// TODO(담당자): 설명` |
+| FIXME | `// FIXME: 설명 + 재현 조건` |
+
+### Git 컨벤션 (공통)
+
+**Commit Message (Conventional Commits)**
+```
+<type>(<scope>): <subject>
+
+<body>
+
+<footer>
+```
+**Types:** `feat` `fix` `refactor` `docs` `test` `chore` `perf` `ci`
+
+**Branch Naming**
+```
+<type>/<short-description>
+예: feat/motion-planner-refactor, fix/velocity-overflow
+```
+
+### Git Workflow (팀 프로젝트)
+
+> 아래는 기본 템플릿이다. 프로젝트 초기에 AI가 팀 규모와 프로젝트 성격을 분석하여 적절한 전략을 제안하고, Human 승인 후 확정한다.
+
+**브랜치 전략**
+
+| 브랜치 | 역할 | 머지 대상 |
+|---------|------|----------|
+| `main` | 안정 릴리즈 | ← `develop` (Quality Gate 통과 후) |
+| `develop` | 통합 개발 | ← `feature/*`, `fix/*`, `docs/*` |
+| `feature/<설명>` | 기능 개발 | → `develop` |
+| `fix/<설명>` | 버그 수정 | → `develop` |
+| `docs/<설명>` | 문서 변경 (`.cowork/` 포함) | → `develop` |
+
+> 1인 프로젝트나 소규모 팀에서는 `main` + `feature/*` 단순 구조로 충분하다.
+
+**머지 규칙**
+
+| 대상 | 규칙 |
+|------|------|
+| feature → develop | PR 필수, 최소 1인 리뷰 (팀 2인 이상 시) |
+| develop → main | Quality Gate 통과 + Master 승인 |
+| 긴급 수정 (hotfix) | main에서 분기 → main + develop 동시 머지 |
+
+**커밋 분리 원칙**
+
+| 커밋 유형 | 접두사 | 예시 |
+|----------|---------|------|
+| `.cowork/` 문서 변경 | `docs(cowork):` | `docs(cowork): update project_state for Phase 2` |
+| 소스코드 변경 | `feat/fix/refactor:` | `feat(planner): add velocity limit check` |
+| 테스트 변경 | `test:` | `test(planner): add boundary condition tests` |
+
+> `.cowork/` 문서 변경과 소스코드 변경은 별도 커밋으로 분리한다.
+
+### .cowork 파일 충돌 방지 및 해결
+
+팀 프로젝트에서 `.cowork/` 파일의 머지 충돌을 최소화하기 위한 규칙이다.
+
+**충돌 방지 설계**
+
+| 파일 | 수정 범위 | 충돌 위험 |
+|------|----------|----------|
+| `project_state.md` | 세션 종료 시 동기화 | 중간 — push 전 pull 필수 |
+| `team_board.md` | 각자 담당 행만 수정 | 낮음 — 행 단위 분리로 충돌 최소 |
+| `my_state.md` | 본인만 수정 | 없음 |
+| 개인 `session_logs/` | 본인만 생성, git 제외 | 없음 |
+| ADR 파일 | 신규 생성 (기존 수정 듬무) | 낮음 |
+| `deliverable_plan.md` | 확정 후 변경 드뭄 | 낮음 |
+| `requirement_spec.md` 등 공유 문서 | 복수 팀원 수정 가능 | 중간 — docs/ 브랜치 권장 |
+
+**충돌 발생 시 해결 우선순위**
+
+1. **`project_state.md`**: 최신 세션 데이터 우선 — 더 최근에 갱신된 데이터 채택
+2. **`team_board.md`**: 각자 담당 행은 해당 팀원의 버전 우선
+3. **공유 소스 문서**: 승인된 ADR/결정 기록 우선 → 세션 로그 → 대화 내용
+4. **판단 불가 시**: 두 버전 모두 보존하고 Human에게 확인 요청
+
+---
+
+## 언어/프레임워크별 컨벤션
+
+> 이 섹션은 `03_design_artifacts/tech_stack.md`에 기술스택이 확정되면,
+> AI가 해당 기술에 맞는 컨벤션을 자동으로 구성한다.
+>
+> - 확정된 기술에 해당하는 컨벤션 섹션만 생성한다
+> - 프로젝트에서 사용하지 않는 기술의 컨벤션은 포함하지 않는다
+> - 기존에 없는 기술이 선정되면 AI가 모범 사례 기반으로 초안을 제안한다
+
+- 아직 확정된 기술스택별 추가 규칙 없음
+- 기술스택 확정 후 이 아래에 실제 언어/프레임워크별 컨벤션 섹션을 추가한다
