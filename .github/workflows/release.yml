@@ -33,9 +33,23 @@ jobs:
         if: github.event_name == 'workflow_dispatch'
         shell: pwsh
         run: |
-          $ver = "${{ github.event.inputs.version }}"
-          git tag -a "v$ver" -m "release: v$ver"
-          git push origin "refs/tags/v$ver"
+          $ver = "${{ github.event.inputs.version }}".Trim()
+          $ver = $ver -replace '^v', ''
+          if ($ver -notmatch '^\d+\.\d+\.\d+$') {
+            Write-Error "Invalid version '$ver'. Expected MAJOR.MINOR.PATCH (e.g., 1.0.0)."
+            exit 1
+          }
+          $tag = "v$ver"
+          git fetch --force --tags
+          $remoteTag = git ls-remote --tags origin "refs/tags/$tag"
+
+          if ($remoteTag) {
+            Write-Host "Tag $tag already exists on origin. Reusing the tagged commit."
+            git checkout $tag
+          } else {
+            git tag -a $tag -m "release: $tag"
+            git push origin "refs/tags/$tag"
+          }
 
       - name: Extract version from tag
         id: version
@@ -66,7 +80,7 @@ jobs:
 
           foreach ($asset in $assets) {
             if (-not (Test-Path $asset)) { Write-Error "Missing: $asset"; exit 1 }
-            Write-Host "$asset: $((Get-Item $asset).Length) bytes"
+            Write-Host ("{0}: {1} bytes" -f $asset, (Get-Item $asset).Length)
           }
 
       - name: Create GitHub Release
