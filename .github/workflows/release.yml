@@ -33,7 +33,12 @@ jobs:
         if: github.event_name == 'workflow_dispatch'
         shell: pwsh
         run: |
-          $ver = "${{ github.event.inputs.version }}"
+          $ver = "${{ github.event.inputs.version }}".Trim()
+          $ver = $ver -replace '^v', ''
+          if ($ver -notmatch '^\d+\.\d+\.\d+$') {
+            Write-Error "Invalid version '$ver'. Expected MAJOR.MINOR.PATCH (e.g., 1.0.0)."
+            exit 1
+          }
           $tag = "v$ver"
           git fetch --force --tags
           $remoteTag = git ls-remote --tags origin "refs/tags/$tag"
