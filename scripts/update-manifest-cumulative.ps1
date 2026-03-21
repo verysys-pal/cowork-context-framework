@@ -127,7 +127,8 @@ function New-CumulativeBlock {
 }
 
 $repoRoot = if ($PSScriptRoot) { Split-Path -Parent $PSScriptRoot } else { (Get-Location).Path }
-$manifestPath = Join-Path $repoRoot "frameworks\$Lang\.cowork\upgrade_manifest.md"
+$frameworkRoot = Join-Path (Join-Path $repoRoot 'frameworks') $Lang
+$manifestPath = Join-Path (Join-Path $frameworkRoot '.cowork') 'upgrade_manifest.md'
 $manifestPathInRepo = "frameworks/$Lang/.cowork/upgrade_manifest.md"
 
 if (-not (Test-Path $manifestPath)) {

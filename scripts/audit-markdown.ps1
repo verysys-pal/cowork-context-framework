@@ -57,14 +57,14 @@ $patterns = @(
 )
 
 $files = Get-ChildItem -Path $repoRoot -Recurse -File -Filter *.md |
-    Where-Object { $_.FullName -notmatch '\\dist\\' }
+    Where-Object { $_.FullName -notmatch '(^|[\\/])dist([\\/]|$)' }
 
 $findings = New-Object System.Collections.Generic.List[object]
 
 foreach ($file in $files) {
     $lines = Get-Content -Path $file.FullName -Encoding UTF8
     for ($i = 0; $i -lt $lines.Count; $i++) {
-            $line = $lines[$i]
+        $line = $lines[$i]
         foreach ($pattern in $patterns) {
             if (& $pattern.IsMatch $line) {
                 $relativePath = Get-RepoRelativePath -BasePath $repoRoot -FullPath $file.FullName

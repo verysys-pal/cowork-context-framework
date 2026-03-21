@@ -16,17 +16,18 @@ $ErrorActionPreference = 'Stop'
 
 $scriptRoot = $PSScriptRoot
 $repoRoot = Split-Path -Parent $scriptRoot
+$frameworksRoot = Join-Path $repoRoot 'frameworks'
 $versionFile = Join-Path $repoRoot 'VERSION'
 $changelogFile = Join-Path $repoRoot 'CHANGELOG.md'
 $frameworkManifests = @(
     [pscustomobject]@{
         Lang = 'ko'
-        Path = Join-Path $repoRoot 'frameworks\ko\.cowork\upgrade_manifest.md'
+        Path = Join-Path (Join-Path (Join-Path $frameworksRoot 'ko') '.cowork') 'upgrade_manifest.md'
         DateField = '날짜'
     },
     [pscustomobject]@{
         Lang = 'en'
-        Path = Join-Path $repoRoot 'frameworks\en\.cowork\upgrade_manifest.md'
+        Path = Join-Path (Join-Path (Join-Path $frameworksRoot 'en') '.cowork') 'upgrade_manifest.md'
         DateField = 'Date'
     }
 ) | Where-Object { Test-Path $_.Path }

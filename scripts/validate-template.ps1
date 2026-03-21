@@ -6,7 +6,7 @@ param(
 $ErrorActionPreference = 'Stop'
 
 $repoRoot = Split-Path -Parent $PSScriptRoot
-$frameworkRoot = Join-Path $repoRoot "frameworks\$Lang"
+$frameworkRoot = Join-Path (Join-Path $repoRoot 'frameworks') $Lang
 
 if (-not (Test-Path $frameworkRoot)) {
     throw "Missing framework root: $frameworkRoot"

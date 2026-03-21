@@ -6,7 +6,7 @@ param(
 $ErrorActionPreference = 'Stop'
 
 $repoRoot = Split-Path -Parent $PSScriptRoot
-$frameworkRoot = Join-Path $repoRoot "frameworks\$Lang"
+$frameworkRoot = Join-Path (Join-Path $repoRoot 'frameworks') $Lang
 $distRoot = Join-Path $repoRoot 'dist'
 $archiveName = switch ($Lang) {
     'ko' { 'cowork-context-framework-kr.zip' }

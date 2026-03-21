@@ -56,12 +56,18 @@ jobs:
           $ver = "${{ steps.version.outputs.version }}"
           ./scripts/release.ps1 verify -Version $ver -Build
 
-      - name: Verify zip asset
+      - name: Verify zip assets
         shell: pwsh
         run: |
-          $kr = 'dist/cowork-context-framework-kr.zip'
-          if (-not (Test-Path $kr)) { Write-Error "Missing: $kr"; exit 1 }
-          Write-Host "kr: $((Get-Item $kr).Length) bytes"
+          $assets = @(
+            'dist/cowork-context-framework-kr.zip',
+            'dist/cowork-context-framework-en.zip'
+          )
+
+          foreach ($asset in $assets) {
+            if (-not (Test-Path $asset)) { Write-Error "Missing: $asset"; exit 1 }
+            Write-Host "$asset: $((Get-Item $asset).Length) bytes"
+          }
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
@@ -69,4 +75,5 @@ jobs:
           tag_name: v${{ steps.version.outputs.version }}
           files: |
             dist/cowork-context-framework-kr.zip
+            dist/cowork-context-framework-en.zip
           generate_release_notes: true
