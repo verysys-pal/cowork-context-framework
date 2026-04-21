@@ -26,6 +26,13 @@ npm install
 npm run dev
 ```
 
+### 3. 커스텀 폴더 감시 (옵션)
+기본적으로 `.cowork` 폴더를 감시하지만, 환경 변수를 통해 대상을 변경할 수 있습니다.
+
+```bash
+MONITOR_FOLDER=your-folder-name npm run dev
+```
+
 - **Frontend**: http://localhost:3001
 - **Backend API**: http://localhost:3002
 

@@ -31,7 +31,13 @@ app.get('/', (req, res) => {
 app.get('/favicon.ico', (req, res) => res.status(204).end());
 
 const WORKSPACE_PATH = path.resolve(__dirname, '../');
-const COWORK_PATH = path.join(WORKSPACE_PATH, '.cowork');
+const MONITOR_FOLDER = process.env.MONITOR_FOLDER || '.cowork';
+const COWORK_PATH = path.join(WORKSPACE_PATH, MONITOR_FOLDER);
+
+// GET config (to tell frontend what folder we are monitoring)
+app.get('/api/workspace/config', (req, res) => {
+    res.json({ monitorFolder: MONITOR_FOLDER });
+});
 
 // Helper to get git status of files
 const getGitStatus = (dir: string) => {
@@ -124,7 +130,7 @@ app.get('/api/workspace/history', (req, res) => {
                 const [status, filePath] = line.split('\t');
                 const dateEntries = history[currentDate];
                 if (filePath && dateEntries) {
-                    if (filePath.startsWith('.cowork')) {
+                    if (filePath.startsWith(MONITOR_FOLDER)) {
                         dateEntries.push({
                             name: path.basename(filePath),
                             path: filePath,
@@ -165,10 +171,10 @@ app.get('/api/workspace/content', (req, res) => {
     const { path: filePath } = req.query;
     if (!filePath) return res.status(400).json({ error: 'File path required' });
     
-    // Safety check: ensure path is within .cowork
+    // Safety check: ensure path is within the monitored folder
     const fullPath = path.join(WORKSPACE_PATH, filePath as string);
     if (!fullPath.startsWith(COWORK_PATH)) {
-        return res.status(403).json({ error: 'Access denied' });
+        return res.status(403).json({ error: `Access denied: outside ${MONITOR_FOLDER}` });
     }
     
     if (!fs.existsSync(fullPath)) return res.status(404).json({ error: 'File not found' });

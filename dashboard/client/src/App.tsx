@@ -25,10 +25,15 @@ function App() {
   const [mermaidChart, setMermaidChart] = useState<string>('')
   const [previewContent, setPreviewContent] = useState<string | null>(null)
   const [previewFileName, setPreviewFileName] = useState<string | null>(null)
+  const [monitorFolder, setMonitorFolder] = useState<string>('.cowork')
 
   const API_BASE = 'http://localhost:3002/api/workspace'
 
   useEffect(() => {
+    fetch(`${API_BASE}/config`)
+      .then(res => res.json())
+      .then(data => setMonitorFolder(data.monitorFolder))
+
     fetch(`${API_BASE}/folders`)
       .then(res => res.json())
       .then(data => setFolders(data))
@@ -69,7 +74,7 @@ function App() {
   const handleFileClick = (file: GitFile) => {
     let filePath = '';
     if (viewMode === 'folder' && selectedFolder) {
-      filePath = `.cowork/${selectedFolder}/${file.path || file.name}`;
+      filePath = `${monitorFolder}/${selectedFolder}/${file.path || file.name}`;
     } else {
       filePath = file.path || '';
     }
