@@ -26,11 +26,12 @@ npm install
 npm run dev
 ```
 
-### 3. 커스텀 폴더 감시 (옵션)
-기본적으로 `.cowork` 폴더를 감시하지만, 환경 변수를 통해 대상을 변경할 수 있습니다.
+#### 대상 폴더 변경 (선택 사항)
+기본적으로 대시보드는 프로젝트 루트의 `.cowork` 폴더를 모니터링합니다. 다른 이름의 폴더를 모니터링하려면 `MONITOR_FOLDER` 환경 변수를 사용하세요.
 
 ```bash
-MONITOR_FOLDER=your-folder-name npm run dev
+# 'my-project-data' 폴더를 모니터링
+MONITOR_FOLDER=my-project-data npm run dev
 ```
 
 - **Frontend**: http://localhost:3001
