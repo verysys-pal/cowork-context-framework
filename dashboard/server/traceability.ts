@@ -49,8 +49,9 @@ export const parseTraceability = (coworkPath: string) => {
                     return;
                 }
                 
-                const id = parts[1] || '';
+                const rawId = parts[1] || '';
                 const label = parts[2] || '';
+                const id = rawId.replace(/[^a-zA-Z0-9_-]/g, '');
                 
                 // Identify node type by ID prefix
                 let type: Node['type'] | null = null;
@@ -61,7 +62,7 @@ export const parseTraceability = (coworkPath: string) => {
                 else if (id.startsWith('RULE-')) type = 'task'; // Rules treated as tasks for styling
                 
                 if (id && type) {
-                    nodes.push({ id, label, type });
+                    nodes.push({ id, label: label.replace(/['"]/g, ''), type });
                     
                     // Extract references from all columns
                     parts.forEach(part => {

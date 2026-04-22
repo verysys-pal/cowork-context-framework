@@ -1,17 +1,17 @@
-// Self-destroying Service Worker to break out of a SW trap
 self.addEventListener('install', (event) => {
-  self.skipWaiting();
+  event.waitUntil(self.skipWaiting());
 });
 
 self.addEventListener('activate', (event) => {
-  self.registration.unregister()
-    .then(() => self.clients.matchAll())
-    .then((clients) => {
-      clients.forEach(client => client.navigate(client.url));
-    });
+  event.waitUntil(
+    (async () => {
+      const cacheKeys = await caches.keys();
+      await Promise.all(cacheKeys.map((key) => caches.delete(key)));
+      await self.registration.unregister();
+    })()
+  );
 });
 
 self.addEventListener('fetch', (event) => {
-  // Do nothing, let it fall back to network
-  return;
+  // Pass through natively
 });

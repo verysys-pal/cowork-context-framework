@@ -30,17 +30,37 @@ function App() {
   const API_BASE = 'http://localhost:3002/api/workspace'
 
   useEffect(() => {
+    const handleFetchErr = async (res: Response, endpoint: string) => {
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const text = await res.text();
+      try {
+        return JSON.parse(text);
+      } catch (err) {
+        console.error(`Received invalid JSON from ${endpoint}:`, text.slice(0, 100));
+        throw new Error(`Expected JSON, got: ${text.slice(0, 50)}`);
+      }
+    };
+
     fetch(`${API_BASE}/config`)
-      .then(res => res.json())
+      .then(res => handleFetchErr(res, '/config'))
       .then(data => setMonitorFolder(data.monitorFolder))
+      .catch(err => console.error('Fetch config error:', err))
 
     fetch(`${API_BASE}/folders`)
-      .then(res => res.json())
-      .then(data => setFolders(data))
+      .then(res => handleFetchErr(res, '/folders'))
+      .then(data => {
+        if (Array.isArray(data)) setFolders(data)
+        else console.error('Failed to load folders:', data)
+      })
+      .catch(err => console.error('Fetch folders error:', err))
 
     fetch(`${API_BASE}/history`)
-      .then(res => res.json())
-      .then(data => setHistory(data))
+      .then(res => handleFetchErr(res, '/history'))
+      .then(data => {
+        if (Array.isArray(data)) setHistory(data)
+        else console.error('Failed to load history:', data)
+      })
+      .catch(err => console.error('Fetch history error:', err))
   }, [])
 
   const handleFolderSelect = (folder: string) => {
@@ -49,8 +69,22 @@ function App() {
     setViewMode('folder')
     setPreviewContent(null)
     fetch(`${API_BASE}/files?folder=${folder}`)
-      .then(res => res.json())
-      .then(data => setFiles(data))
+      .then(async res => {
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const text = await res.text();
+        return JSON.parse(text);
+      })
+      .then(data => {
+        if (Array.isArray(data)) setFiles(data)
+        else {
+          console.error('Failed to load files:', data)
+          setFiles([])
+        }
+      })
+      .catch(err => {
+        console.error('Fetch files error:', err)
+        setFiles([])
+      })
   }
 
   const handleHistorySelect = (item: HistoryItem) => {
@@ -67,8 +101,16 @@ function App() {
     setSelectedHistory(null)
     setPreviewContent(null)
     fetch(`${API_BASE}/traceability`)
-      .then(res => res.json())
+      .then(async res => {
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const text = await res.text();
+        return JSON.parse(text);
+      })
       .then(data => setMermaidChart(data.mermaid))
+      .catch(err => {
+        console.error('Traceability fetch error:', err);
+        setMermaidChart('graph TD\n  Error["Failed to load graph"]');
+      })
   }
 
   const handleFileClick = (file: GitFile) => {
@@ -82,10 +124,18 @@ function App() {
     if (!filePath) return;
 
     fetch(`${API_BASE}/content?path=${encodeURIComponent(filePath)}`)
-      .then(res => res.json())
+      .then(async res => {
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const text = await res.text();
+        return JSON.parse(text);
+      })
       .then(data => {
         setPreviewContent(data.content)
         setPreviewFileName(file.name)
+      })
+      .catch(err => {
+        console.error('Content fetch error:', err);
+        setPreviewContent(`Error loading file: ${err.message}`);
       })
   }
 

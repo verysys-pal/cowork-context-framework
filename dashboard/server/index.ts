@@ -30,7 +30,7 @@ app.get('/', (req, res) => {
 
 app.get('/favicon.ico', (req, res) => res.status(204).end());
 
-const WORKSPACE_PATH = path.resolve(__dirname, '../');
+const WORKSPACE_PATH = path.resolve(__dirname, '../../');
 const MONITOR_FOLDER = process.env.MONITOR_FOLDER || '.cowork';
 const COWORK_PATH = path.join(WORKSPACE_PATH, MONITOR_FOLDER);
 
@@ -66,10 +66,11 @@ app.get('/api/workspace/folders', (req, res) => {
             return res.status(404).json({ error: '.cowork folder not found' });
         }
         
-        const folders = fs.readdirSync(COWORK_PATH)
+        const subfolders = fs.readdirSync(COWORK_PATH)
             .filter(file => fs.statSync(path.join(COWORK_PATH, file)).isDirectory());
         
-        res.json(folders);
+        // Always include the root directory itself to view top-level files
+        res.json(['.', ...subfolders]);
     } catch (error) {
         res.status(500).json({ error: 'Failed to read folders' });
     }

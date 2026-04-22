@@ -31,11 +31,16 @@ npm run dev
 
 ```bash
 # 'my-project-data' 폴더를 모니터링
-MONITOR_FOLDER=my-project-data npm run dev
+MONITOR_FOLDER=docs npm run dev
 ```
 
 - **Frontend**: http://localhost:3001
 - **Backend API**: http://localhost:3002
+
+
+```bash
+$ lsof -i :3001 -i :3002 -t | xargs -r kill -9
+```
 
 ## 프로젝트 구조
 
