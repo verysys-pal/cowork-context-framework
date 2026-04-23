@@ -33,7 +33,23 @@ app.get('/favicon.ico', (req, res) => res.status(204).end());
 const WORKSPACE_PATH = path.resolve(__dirname, '../../');
 let currentMonitorFolder = process.env.MONITOR_FOLDER || '.cowork';
 
-const getCOWORKPath = () => path.join(WORKSPACE_PATH, currentMonitorFolder);
+const getCOWORKPath = () => path.resolve(WORKSPACE_PATH, currentMonitorFolder);
+
+const isWithinPath = (targetPath: string, parentPath: string): boolean => {
+    const relative = path.relative(parentPath, targetPath);
+    return relative === '' || (!relative.startsWith('..') && !path.isAbsolute(relative));
+};
+
+const findGitRoot = (startPath: string): string | null => {
+    try {
+        const output = execSync('git rev-parse --show-toplevel', { cwd: startPath, encoding: 'utf8' }).trim();
+        return output || null;
+    } catch {
+        return null;
+    }
+};
+
+const GIT_ROOT = findGitRoot(WORKSPACE_PATH);
 
 const normalizeMonitorFolder = (folder: string): string | null => {
     const normalized = folder.trim();
@@ -48,8 +64,33 @@ const normalizeMonitorFolder = (folder: string): string | null => {
 };
 
 const listAvailableMonitorFolders = (): string[] => {
-    const entries = fs.readdirSync(WORKSPACE_PATH, { withFileTypes: true });
-    return ['.', ...entries.filter((entry) => entry.isDirectory() && entry.name !== 'node_modules').map((entry) => entry.name).sort((a, b) => a.localeCompare(b))];
+    const basePath = getCOWORKPath();
+
+    if (!fs.existsSync(basePath) || !fs.statSync(basePath).isDirectory()) {
+        return ['.'];
+    }
+
+    const folders = new Set<string>([currentMonitorFolder]);
+    const parentFolder = path.relative(WORKSPACE_PATH, path.dirname(basePath));
+    if (parentFolder && !parentFolder.startsWith('..') && !path.isAbsolute(parentFolder)) {
+        folders.add(parentFolder || '.');
+    }
+
+    for (const entry of fs.readdirSync(basePath, { withFileTypes: true })) {
+        if (!entry.isDirectory() || entry.name === 'node_modules') continue;
+        const relativePath = path.relative(WORKSPACE_PATH, path.join(basePath, entry.name));
+        if (relativePath && !relativePath.startsWith('..') && !path.isAbsolute(relativePath)) {
+            folders.add(relativePath || '.');
+        }
+    }
+
+    return Array.from(folders).sort((a, b) => {
+        if (a === currentMonitorFolder) return -1;
+        if (b === currentMonitorFolder) return 1;
+        if (a === '.') return -1;
+        if (b === '.') return 1;
+        return a.localeCompare(b);
+    });
 };
 
 const OPENCODE_METRIC_LABELS = ['Messages', 'Input Tokens', 'Output Tokens', 'Cache Read'] as const;
@@ -410,14 +451,18 @@ app.put('/api/workspace/config', (req, res) => {
 });
 
 // Helper to get git status of files
-const getGitStatus = (dir: string) => {
+const getGitStatus = () => {
+    if (!GIT_ROOT) {
+        return {};
+    }
+
     try {
-        const output = execSync('git status --porcelain', { cwd: WORKSPACE_PATH }).toString();
+        const output = execSync('git status --porcelain=v1 -uall', { cwd: GIT_ROOT }).toString();
         const statusMap: Record<string, string> = {};
         
         output.split('\n').forEach(line => {
             if (!line) return;
-            const status = line.substring(0, 2).trim();
+            const status = line.substring(0, 2).trim() || line.substring(0, 2);
             const filePath = line.substring(3).trim();
             statusMap[filePath] = status;
         });
@@ -452,11 +497,13 @@ app.get('/api/workspace/files', (req, res) => {
     const { folder } = req.query;
     if (!folder) return res.status(400).json({ error: 'Folder query param required' });
     
-    const folderPath = path.join(getCOWORKPath(), folder as string);
+    const coworkPath = getCOWORKPath();
+    const folderPath = path.resolve(coworkPath, folder as string);
+    if (!isWithinPath(folderPath, coworkPath)) return res.status(403).json({ error: 'Folder outside monitor root' });
     if (!fs.existsSync(folderPath)) return res.status(404).json({ error: 'Folder not found' });
     
     try {
-        const gitStatus = getGitStatus(WORKSPACE_PATH);
+        const gitStatus = getGitStatus();
         const fileList: any[] = [];
         
         const scanDir = (dir: string) => {
@@ -488,8 +535,12 @@ app.get('/api/workspace/files', (req, res) => {
 // GET change history grouped by date
 app.get('/api/workspace/history', (req, res) => {
     try {
+        if (!GIT_ROOT) {
+            return res.json([]);
+        }
+
         // Get git log with date and changed files
-        const output = execSync('git log --date=short --pretty=format:"COMMIT:%ad" --name-status', { cwd: WORKSPACE_PATH }).toString();
+        const output = execSync('git log --date=short --pretty=format:"COMMIT:%ad" --name-status', { cwd: GIT_ROOT }).toString();
         
         const history: Record<string, Map<string, { name: string; path: string; status: string }>> = {};
         let currentDate = '';
@@ -505,7 +556,9 @@ app.get('/api/workspace/history', (req, res) => {
                 }
                 const dateEntries = history[currentDate];
                 if (filePath && dateEntries) {
-                    if (currentMonitorFolder === '.' || filePath.startsWith(currentMonitorFolder)) {
+                    const monitorPath = currentMonitorFolder === '.' ? '' : currentMonitorFolder;
+                    const withinFolder = monitorPath === '' || isWithinPath(path.resolve(WORKSPACE_PATH, filePath), path.resolve(WORKSPACE_PATH, monitorPath));
+                    if (withinFolder) {
                         if (!dateEntries.has(filePath)) {
                             dateEntries.set(filePath, {
                                 name: path.basename(filePath),
@@ -558,8 +611,8 @@ app.get('/api/workspace/content', (req, res) => {
     if (!filePath) return res.status(400).json({ error: 'File path required' });
     
     // Safety check: ensure path is within the monitored folder
-    const fullPath = path.join(WORKSPACE_PATH, filePath as string);
-    if (!fullPath.startsWith(getCOWORKPath())) {
+    const fullPath = path.resolve(WORKSPACE_PATH, filePath as string);
+    if (!isWithinPath(fullPath, getCOWORKPath())) {
         return res.status(403).json({ error: `Access denied: outside ${currentMonitorFolder}` });
     }
     

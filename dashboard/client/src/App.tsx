@@ -41,6 +41,17 @@ interface OpencodeUsageRow {
   cacheRead: string;
 }
 
+const getParentFolder = (folder: string): string | null => {
+  const normalized = folder.replace(/\\/g, '/').replace(/\/+$/, '')
+  if (!normalized || normalized === '.') return null
+
+  const parentIndex = normalized.lastIndexOf('/')
+  if (parentIndex < 0) return '.'
+
+  const parent = normalized.slice(0, parentIndex)
+  return parent || '.'
+}
+
 function App() {
   const [folders, setFolders] = useState<string[]>([])
   const [history, setHistory] = useState<HistoryItem[]>([])
@@ -180,7 +191,7 @@ function App() {
     setSelectedHistory(null)
     setViewMode('folder')
     setPreviewFile(null)
-    fetch(`${API_BASE}/files?folder=${folder}`)
+    fetch(`${API_BASE}/files?folder=${encodeURIComponent(folder)}`)
       .then(async res => {
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const text = await res.text();
@@ -265,14 +276,14 @@ function App() {
       })
   }
 
-  const handleMonitorFolderApply = async () => {
+  const handleMonitorFolderApply = async (targetFolder = selectedMonitorFolder) => {
     try {
       setMonitorFolderError(null)
       setMonitorFolderUpdating(true)
       const res = await fetch(`${API_BASE}/config`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ monitorFolder: selectedMonitorFolder }),
+        body: JSON.stringify({ monitorFolder: targetFolder }),
       })
       const text = await res.text()
       if (!res.ok) {
@@ -288,6 +299,7 @@ function App() {
 
       const data = JSON.parse(text) as WorkspaceConfig
       setMonitorFolder(data.monitorFolder)
+      setSelectedMonitorFolder(data.monitorFolder)
       setSelectedFolder(null)
       setSelectedHistory(null)
       setFiles([])
@@ -316,6 +328,24 @@ function App() {
       <div className="sidebar">
         <div className="sidebar-title">Monitor Folder</div>
         <div className="monitor-folder-controls">
+          <div className="monitor-folder-path">
+            <span>Current</span>
+            <code>{monitorFolder}</code>
+            {getParentFolder(monitorFolder) && (
+              <button
+                type="button"
+                className="monitor-folder-link"
+                onClick={() => {
+                  const parent = getParentFolder(monitorFolder)
+                  if (!parent) return
+                  setSelectedMonitorFolder(parent)
+                  void handleMonitorFolderApply(parent)
+                }}
+              >
+                ⬆ Parent
+              </button>
+            )}
+          </div>
           <select
             className="monitor-folder-select"
             value={selectedMonitorFolder}
