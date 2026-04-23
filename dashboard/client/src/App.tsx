@@ -1,6 +1,6 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef, useCallback } from 'react'
 import Mermaid from './components/Mermaid'
-import MarkdownPreview from './components/MarkdownPreview'
+import FilePreview from './components/FilePreview'
 import './App.css'
 
 interface GitFile {
@@ -15,59 +15,171 @@ interface HistoryItem {
   files: GitFile[];
 }
 
+interface WorkspaceConfig {
+  monitorFolder: string;
+  availableFolders?: string[];
+}
+
+interface FilePreviewData {
+  fileName: string;
+  filePath: string;
+  extension: string;
+  kind: 'markdown' | 'text' | 'image' | 'pdf' | 'unknown';
+  mimeType: string;
+  size: number;
+  content?: string;
+  dataUrl?: string;
+}
+
+interface OpencodeUsageRow {
+  model: string;
+  messageValue: number;
+  usageValue: number;
+  message: string;
+  inTokens: string;
+  outTokens: string;
+  cacheRead: string;
+}
+
 function App() {
   const [folders, setFolders] = useState<string[]>([])
   const [history, setHistory] = useState<HistoryItem[]>([])
   const [selectedFolder, setSelectedFolder] = useState<string | null>(null)
   const [selectedHistory, setSelectedHistory] = useState<HistoryItem | null>(null)
   const [files, setFiles] = useState<GitFile[]>([])
-  const [viewMode, setViewMode] = useState<'folder' | 'history' | 'traceability'>('folder')
+  const [viewMode, setViewMode] = useState<'folder' | 'history' | 'traceability' | 'opencodeUsage'>('folder')
   const [mermaidChart, setMermaidChart] = useState<string>('')
-  const [previewContent, setPreviewContent] = useState<string | null>(null)
-  const [previewFileName, setPreviewFileName] = useState<string | null>(null)
+  const [previewFile, setPreviewFile] = useState<FilePreviewData | null>(null)
   const [monitorFolder, setMonitorFolder] = useState<string>('.cowork')
+  const [selectedMonitorFolder, setSelectedMonitorFolder] = useState<string>('.cowork')
+  const [availableMonitorFolders, setAvailableMonitorFolders] = useState<string[]>([])
+  const [monitorFolderUpdating, setMonitorFolderUpdating] = useState(false)
+  const [monitorFolderError, setMonitorFolderError] = useState<string | null>(null)
+  const [opencodeUsage, setOpencodeUsage] = useState<OpencodeUsageRow[]>([])
+  const [opencodeUsageLoading, setOpencodeUsageLoading] = useState(true)
+  const [opencodeUsageRefreshing, setOpencodeUsageRefreshing] = useState(false)
+  const [opencodeUsageError, setOpencodeUsageError] = useState<string | null>(null)
+  const opencodeUsageLoadedRef = useRef(false)
 
   const API_BASE = 'http://localhost:3002/api/workspace'
 
-  useEffect(() => {
-    const handleFetchErr = async (res: Response, endpoint: string) => {
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const text = await res.text();
+  const fetchJson = useCallback(async (endpoint: string) => {
+    const res = await fetch(`${API_BASE}${endpoint}`)
+    const text = await res.text()
+    if (!res.ok) {
+      let errorMessage = `HTTP ${res.status}`
       try {
-        return JSON.parse(text);
-      } catch (err) {
-        console.error(`Received invalid JSON from ${endpoint}:`, text.slice(0, 100));
-        throw new Error(`Expected JSON, got: ${text.slice(0, 50)}`);
+        const parsed = JSON.parse(text)
+        if (parsed?.error) errorMessage = parsed.error
+      } catch {
+        // Keep HTTP error message.
       }
-    };
+      throw new Error(errorMessage)
+    }
 
-    fetch(`${API_BASE}/config`)
-      .then(res => handleFetchErr(res, '/config'))
-      .then(data => setMonitorFolder(data.monitorFolder))
-      .catch(err => console.error('Fetch config error:', err))
+    return JSON.parse(text)
+  }, [API_BASE])
 
-    fetch(`${API_BASE}/folders`)
-      .then(res => handleFetchErr(res, '/folders'))
-      .then(data => {
-        if (Array.isArray(data)) setFolders(data)
-        else console.error('Failed to load folders:', data)
+  const loadWorkspaceData = useCallback(async () => {
+    const [configData, foldersData, historyData] = await Promise.all([
+      fetchJson('/config') as Promise<WorkspaceConfig>,
+      fetchJson('/folders'),
+      fetchJson('/history'),
+    ])
+
+    return { configData, foldersData, historyData }
+  }, [fetchJson])
+
+  useEffect(() => {
+    let cancelled = false
+
+    void loadWorkspaceData()
+      .then(({ configData, foldersData, historyData }) => {
+        if (cancelled) return
+
+        if (configData && typeof configData.monitorFolder === 'string') {
+          setMonitorFolder(configData.monitorFolder)
+          setSelectedMonitorFolder(configData.monitorFolder)
+          setAvailableMonitorFolders(Array.isArray(configData.availableFolders) ? configData.availableFolders : [])
+        }
+
+        if (Array.isArray(foldersData)) setFolders(foldersData)
+        else console.error('Failed to load folders:', foldersData)
+
+        if (Array.isArray(historyData)) setHistory(historyData)
+        else console.error('Failed to load history:', historyData)
       })
-      .catch(err => console.error('Fetch folders error:', err))
+      .catch(err => console.error('Workspace sync error:', err))
 
-    fetch(`${API_BASE}/history`)
-      .then(res => handleFetchErr(res, '/history'))
-      .then(data => {
-        if (Array.isArray(data)) setHistory(data)
-        else console.error('Failed to load history:', data)
-      })
-      .catch(err => console.error('Fetch history error:', err))
+    return () => {
+      cancelled = true
+    }
+  }, [loadWorkspaceData])
+
+  useEffect(() => {
+    let active = true
+
+    const loadOpencodeUsage = async () => {
+      let keepLoading = false
+      try {
+        const isInitialLoad = !opencodeUsageLoadedRef.current
+        if (isInitialLoad) {
+          setOpencodeUsageLoading(true)
+        } else {
+          setOpencodeUsageRefreshing(true)
+        }
+        setOpencodeUsageError(null)
+
+        const res = await fetch(`${API_BASE}/opencode-usage`)
+        const text = await res.text()
+        if (!res.ok) {
+          let errorMessage = `HTTP ${res.status}`
+          try {
+            const parsed = JSON.parse(text)
+            if (parsed?.error) errorMessage = parsed.error
+          } catch {
+            // Keep the HTTP status message when the payload is not JSON.
+          }
+          throw new Error(errorMessage)
+        }
+
+        const data = JSON.parse(text)
+        if (!active) return
+        const rows = Array.isArray(data.rows) ? data.rows : []
+        setOpencodeUsage(rows)
+        keepLoading = Boolean(data.loading) && rows.length === 0
+        opencodeUsageLoadedRef.current = true
+      } catch (err) {
+        if (!active) return
+        if (!opencodeUsageLoadedRef.current) {
+          setOpencodeUsage([])
+          keepLoading = true
+        }
+        setOpencodeUsageError(err instanceof Error ? err.message : 'Failed to load opencode usage')
+      } finally {
+        if (active) {
+          setOpencodeUsageLoading(keepLoading)
+          setOpencodeUsageRefreshing(false)
+        }
+      }
+    }
+
+    void loadOpencodeUsage()
+    const interval = window.setInterval(() => {
+      void loadOpencodeUsage()
+    }, 30000)
+
+    return () => {
+      active = false
+      window.clearInterval(interval)
+    }
   }, [])
 
   const handleFolderSelect = (folder: string) => {
     setSelectedFolder(folder)
     setSelectedHistory(null)
     setViewMode('folder')
-    setPreviewContent(null)
+    setPreviewFile(null)
     fetch(`${API_BASE}/files?folder=${folder}`)
       .then(async res => {
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -91,7 +203,7 @@ function App() {
     setSelectedHistory(item)
     setSelectedFolder(null)
     setViewMode('history')
-    setPreviewContent(null)
+    setPreviewFile(null)
     setFiles(item.files)
   }
 
@@ -99,7 +211,7 @@ function App() {
     setViewMode('traceability')
     setSelectedFolder(null)
     setSelectedHistory(null)
-    setPreviewContent(null)
+    setPreviewFile(null)
     fetch(`${API_BASE}/traceability`)
       .then(async res => {
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -111,6 +223,13 @@ function App() {
         console.error('Traceability fetch error:', err);
         setMermaidChart('graph TD\n  Error["Failed to load graph"]');
       })
+  }
+
+  const handleOpencodeUsage = () => {
+    setViewMode('opencodeUsage')
+    setSelectedFolder(null)
+    setSelectedHistory(null)
+    setPreviewFile(null)
   }
 
   const handleFileClick = (file: GitFile) => {
@@ -130,19 +249,92 @@ function App() {
         return JSON.parse(text);
       })
       .then(data => {
-        setPreviewContent(data.content)
-        setPreviewFileName(file.name)
+        setPreviewFile(data)
       })
       .catch(err => {
         console.error('Content fetch error:', err);
-        setPreviewContent(`Error loading file: ${err.message}`);
+        setPreviewFile({
+          fileName: file.name,
+          filePath,
+          extension: '',
+          kind: 'unknown',
+          mimeType: 'text/plain',
+          size: 0,
+          content: `Error loading file: ${err.message}`,
+        });
       })
   }
 
+  const handleMonitorFolderApply = async () => {
+    try {
+      setMonitorFolderError(null)
+      setMonitorFolderUpdating(true)
+      const res = await fetch(`${API_BASE}/config`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ monitorFolder: selectedMonitorFolder }),
+      })
+      const text = await res.text()
+      if (!res.ok) {
+        let message = `HTTP ${res.status}`
+        try {
+          const parsed = JSON.parse(text)
+          if (parsed?.error) message = parsed.error
+        } catch {
+          // keep HTTP status
+        }
+        throw new Error(message)
+      }
+
+      const data = JSON.parse(text) as WorkspaceConfig
+      setMonitorFolder(data.monitorFolder)
+      setSelectedFolder(null)
+      setSelectedHistory(null)
+      setFiles([])
+      setPreviewFile(null)
+      setViewMode('folder')
+      setAvailableMonitorFolders(Array.isArray(data.availableFolders) ? data.availableFolders : [])
+      const { configData, foldersData, historyData } = await loadWorkspaceData()
+      if (configData && typeof configData.monitorFolder === 'string') {
+        setMonitorFolder(configData.monitorFolder)
+        setSelectedMonitorFolder(configData.monitorFolder)
+        setAvailableMonitorFolders(Array.isArray(configData.availableFolders) ? configData.availableFolders : [])
+      }
+      if (Array.isArray(foldersData)) setFolders(foldersData)
+      if (Array.isArray(historyData)) setHistory(historyData)
+    } catch (error) {
+      setMonitorFolderError(error instanceof Error ? error.message : 'Failed to update monitor folder')
+      console.error('Monitor folder update failed:', error)
+    } finally {
+      setMonitorFolderUpdating(false)
+    }
+  }
+
   return (
-    <div className={`app-container ${previewContent ? 'has-preview' : ''}`}>
+    <div className={`app-container ${previewFile ? 'has-preview' : ''}`}>
       {/* 1st Column: Folders */}
       <div className="sidebar">
+        <div className="sidebar-title">Monitor Folder</div>
+        <div className="monitor-folder-controls">
+          <select
+            className="monitor-folder-select"
+            value={selectedMonitorFolder}
+            onChange={(event) => setSelectedMonitorFolder(event.target.value)}
+          >
+            {availableMonitorFolders.map((folder) => (
+              <option key={folder} value={folder}>{folder}</option>
+            ))}
+          </select>
+          <button
+            className="monitor-folder-button"
+            onClick={() => void handleMonitorFolderApply()}
+            disabled={monitorFolderUpdating || selectedMonitorFolder === monitorFolder}
+          >
+            {monitorFolderUpdating ? 'Applying…' : 'Apply'}
+          </button>
+          {monitorFolderError && <div className="monitor-folder-error">{monitorFolderError}</div>}
+          <div className="monitor-folder-current">Current: {monitorFolder}</div>
+        </div>
         <div className="sidebar-title">Project Structure</div>
         {folders.map(folder => (
           <div 
@@ -161,6 +353,12 @@ function App() {
           onClick={handleTraceability}
         >
           🕸️ Traceability Map
+        </div>
+        <div 
+          className={`nav-item ${viewMode === 'opencodeUsage' ? 'active' : ''}`}
+          onClick={handleOpencodeUsage}
+        >
+          🤖 opencode usage
         </div>
       </div>
 
@@ -183,13 +381,59 @@ function App() {
         <div className="dashboard-header">
           <h1>{viewMode === 'folder' ? `Folder: ${selectedFolder}` : 
                viewMode === 'history' ? `Changed on ${selectedHistory?.date}` : 
-               'Traceability Map'}</h1>
+               viewMode === 'traceability' ? 'Traceability Map' :
+               'opencode usage'}</h1>
           <p>{viewMode === 'traceability' ? 'Visualizing organic connections between project Registry files' : 
+              viewMode === 'opencodeUsage' ? 'Model-level usage snapshot from `opencode stats --models`' : 
               'Monitoring local file system and git state'}</p>
         </div>
 
         {viewMode === 'traceability' ? (
           mermaidChart ? <Mermaid chart={mermaidChart} /> : <div>Loading graph...</div>
+        ) : viewMode === 'opencodeUsage' ? (
+          <div className="usage-page">
+            <div className="usage-page-meta">
+              <span>{opencodeUsageLoading ? 'Loading…' : `${opencodeUsage.length} models`}</span>
+              {opencodeUsageRefreshing && <span>Refreshing…</span>}
+              {opencodeUsageError && <span className="usage-page-error">{opencodeUsageError}</span>}
+            </div>
+            <div className="usage-table usage-table-page">
+              <div className="usage-table-header">
+                <span>Model</span>
+                <span>Usage Bar</span>
+                <span>Message</span>
+                <span>In-Tokens</span>
+                <span>Out-Tokens</span>
+                <span>Cache Read</span>
+              </div>
+              {opencodeUsageLoading && <div className="usage-empty">Loading opencode stats…</div>}
+              {!opencodeUsageLoading && opencodeUsageError && <div className="usage-empty">{opencodeUsageError}</div>}
+              {!opencodeUsageLoading && !opencodeUsageError && opencodeUsage.length === 0 && (
+                <div className="usage-empty">No model usage found.</div>
+              )}
+              {!opencodeUsageLoading && !opencodeUsageError && opencodeUsage.length > 0 && (() => {
+                const sortedRows = [...opencodeUsage].sort((a, b) => b.messageValue - a.messageValue)
+                const peakUsage = Math.max(...sortedRows.map(row => row.usageValue), 0)
+                return sortedRows.map(row => {
+                  const percentage = peakUsage > 0 ? Math.max(0, Math.min((row.usageValue / peakUsage) * 100, 100)) : 0
+                  return (
+                    <div key={row.model} className="usage-table-row">
+                      <div className="usage-model" title={row.model}>{row.model}</div>
+                      <div className="usage-bar-cell" aria-label={`${row.model} usage ${percentage.toFixed(0)}%`}>
+                        <div className="usage-bar-track">
+                          <div className="usage-bar-fill" style={{ width: `${percentage}%` }} />
+                        </div>
+                      </div>
+                      <div className="usage-metric">{row.message}</div>
+                      <div className="usage-metric">{row.inTokens}</div>
+                      <div className="usage-metric">{row.outTokens}</div>
+                      <div className="usage-metric">{row.cacheRead}</div>
+                    </div>
+                  )
+                })
+              })()}
+            </div>
+          </div>
         ) : (
           <div className="folder-grid">
             {Object.entries(
@@ -236,12 +480,11 @@ function App() {
       </div>
 
       {/* 4th Column: Preview */}
-      {previewContent && (
+      {previewFile && (
         <div className="preview-pane">
-          <MarkdownPreview 
-            content={previewContent} 
-            fileName={previewFileName || ''} 
-            onClose={() => setPreviewContent(null)} 
+          <FilePreview
+            file={previewFile}
+            onClose={() => setPreviewFile(null)}
           />
         </div>
       )}
