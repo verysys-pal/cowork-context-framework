@@ -11,16 +11,16 @@ import { CliPage } from './pages/CliPage'
 import { TraceabilityPage } from './pages/TraceabilityPage'
 import { DirectoryPage } from './pages/DirectoryPage'
 import type { GitFile, HistoryItem, WorkspaceConfig, FilePreviewData, OpencodeUsageRow, LinkItem } from './types'
-import { 
+import {
   DEFAULT_LINKS,
   LEGACY_LINK_STORAGE_KEY,
   LINK_GROUP_COLOR_STORAGE_KEY,
-  readLegacyLinks, 
-  filterExcludedFiles, 
-  isExcludedPath, 
-  iconForExplorerFile, 
-  statusLabelForFile, 
-  readLinkGroupColors 
+  readLegacyLinks,
+  filterExcludedFiles,
+  isExcludedPath,
+  iconForExplorerFile,
+  statusLabelForFile,
+  readLinkGroupColors
 } from './utils'
 
 
@@ -79,7 +79,7 @@ function App() {
   const opencodeUsageLoadedRef = useRef(false)
   const opencodeWebLaunchInFlightRef = useRef(false)
 
-  const API_BASE = 'http://localhost:3002/api/workspace'
+  const API_BASE = '/api/workspace'
 
   const fetchJson = useCallback(async (endpoint: string) => {
     const res = await fetch(`${API_BASE}${endpoint}${endpoint.includes('?') ? '&' : '?'}t=${Date.now()}`)
@@ -419,7 +419,7 @@ function App() {
 
   const handleMonitoringToggle = useCallback(() => {
     if (monitorFolderUpdating) return
-    
+
     // Priority: Explicit input > Current Navigated Folder > Previously selected monitor folder
     let targetFolder = monitorFolderInput.trim()
     if (!targetFolder && selectedFolder && selectedFolder !== '.') {
@@ -449,7 +449,7 @@ function App() {
     setMonitorFolderInput(folder);
     // Use the CURRENT monitoringActive state instead of forcing true
     void handleMonitorFolderApply(folder, excludeFolders, monitoringActive, true);
-    
+
     // Also refresh subfolders for the new root
     void loadFoldersForFolder('.').catch(console.error);
     void loadFilesForFolder('.').catch(console.error);
@@ -842,7 +842,7 @@ function App() {
       </div>
 
       {/* 2nd Column: Main Content */}
-      <div className="main-content">
+      <div className={`main-content${viewMode === 'cli' ? ' cli-mode' : ''}`}>
         <div className="dashboard-header">
           <div>
             <h1 title={viewMode === 'directory' ? monitorFolder : undefined}>{viewTitle}</h1>
@@ -900,7 +900,7 @@ function App() {
             handleRemoveExcludeFolder={handleRemoveExcludeFolder}
           />
         ) : viewMode === 'linkPage' ? (
-          <LinkPage 
+          <LinkPage
             linksLoading={linksLoading}
             links={links}
             linksError={linksError}
@@ -922,7 +922,7 @@ function App() {
             linkError={linkError}
           />
         ) : viewMode === 'opencodeUsage' ? (
-          <OpencodeUsagePage 
+          <OpencodeUsagePage
             opencodeUsageLoading={opencodeUsageLoading}
             opencodeUsage={opencodeUsage}
             opencodeUsageRefreshing={opencodeUsageRefreshing}
@@ -966,7 +966,7 @@ function App() {
         )}
 
         {/* Persistent CLI Containers */}
-        <CliPage 
+        <CliPage
           cliPorts={cliPorts}
           activeCliTab={activeCliTab}
           setActiveCliTab={setActiveCliTab}

@@ -1,5 +1,5 @@
 {
-  "monitorFolder": "/home/mhdev/workspace_private/ai-doc-organizer/.cowork",
+  "monitorFolder": "/home/mhdev/workspace_private/nexusSynapse",
   "excludeFolders": [
     "node_modules",
     ".git",

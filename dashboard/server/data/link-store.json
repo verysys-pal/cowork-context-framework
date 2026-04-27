@@ -1,6 +1,13 @@
 {
   "links": [
     {
+      "id": "1777281175646-9864e2de68dec",
+      "title": "Tailscale-Dashboard",
+      "url": "http://100.113.235.19:3001/",
+      "note": "",
+      "tag": "localhost"
+    },
+    {
       "id": "2f198b6e-5ccb-4825-bce3-dbb7c4b99c8c",
       "title": "Multica — Project Management for Human + Agent Teams",
       "url": "http://localhost:3000/",

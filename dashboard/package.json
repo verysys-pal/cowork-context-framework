@@ -7,11 +7,13 @@
     "doc": "docs"
   },
   "scripts": {
-    "clean": "fuser -k 3001/tcp 3002/tcp || true",
+    "clean": "fuser -k 3001/tcp 3002/tcp 3003/tcp 7681/tcp 61208/tcp || true",
     "predev": "npm run clean",
     "dev:client": "cd client && npm run dev",
     "dev:server": "cd server && npm run dev",
-    "dev": "concurrently \"npm run dev:client\" \"npm run dev:server\"",
+    "dev:nvtop": "/home/mhdev/workspace_private/cowork-dashboard-v0/.bin/ttyd -p 7681 nvtop",
+    "dev:glances": "glances -w --port 61208",
+    "dev": "concurrently \"npm run dev:client\" \"npm run dev:server\" \"npm run dev:nvtop\" \"npm run dev:glances\"",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "keywords": [],

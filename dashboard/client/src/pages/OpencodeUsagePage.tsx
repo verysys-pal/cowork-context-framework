@@ -1,4 +1,48 @@
 import type { OpencodeUsageRow } from '../types';
+import { useState, useEffect } from 'react';
+
+function MonitorFrame({ title, port }: { title: string; port: number }) {
+  const [available, setAvailable] = useState<boolean | null>(null);
+
+  useEffect(() => {
+    fetch(`/api/port-status?port=${port}`)
+      .then(r => r.json())
+      .then(data => setAvailable(data.open === true))
+      .catch(() => setAvailable(false));
+  }, [port]);
+
+  return (
+    <div className="usage-monitor-card">
+      <div className="sidebar-title">{title}</div>
+      {available === null && (
+        <div className="monitor-iframe" style={{
+          display: 'flex', alignItems: 'center', justifyContent: 'center',
+          background: 'rgba(255,255,255,0.03)', color: 'rgba(255,255,255,0.3)',
+          fontSize: '0.8rem', borderRadius: '8px',
+        }}>확인 중…</div>
+      )}
+      {available === false && (
+        <div className="monitor-iframe" style={{
+          display: 'flex', alignItems: 'center', justifyContent: 'center',
+          flexDirection: 'column', gap: '8px',
+          background: 'rgba(255,255,255,0.03)', color: 'rgba(255,255,255,0.35)',
+          fontSize: '0.8rem', borderRadius: '8px',
+        }}>
+          <span style={{ fontSize: '1.5rem' }}>📡</span>
+          <span>서비스 꺼짐</span>
+          <span style={{ fontSize: '0.7rem', opacity: 0.5 }}>:{port}</span>
+        </div>
+      )}
+      {available === true && (
+        <iframe
+          src={`http://${window.location.hostname}:${port}`}
+          className="monitor-iframe"
+          title={title}
+        />
+      )}
+    </div>
+  );
+}
 
 export interface OpencodeUsagePageProps {
   opencodeUsageLoading: boolean;
@@ -59,22 +103,8 @@ export function OpencodeUsagePage({
         </div>
       </div>
       <div className="usage-monitor-grid">
-        <div className="usage-monitor-card">
-          <div className="sidebar-title">GPU Monitor (nvtop)</div>
-          <iframe
-            src={`http://${window.location.hostname}:7681`}
-            className="monitor-iframe"
-            title="nvtop"
-          />
-        </div>
-        <div className="usage-monitor-card">
-          <div className="sidebar-title">System Monitor (glances)</div>
-          <iframe
-            src={`http://${window.location.hostname}:61208`}
-            className="monitor-iframe"
-            title="glances"
-          />
-        </div>
+        <MonitorFrame title="GPU Monitor (nvtop)" port={7681} />
+        <MonitorFrame title="System Monitor (glances)" port={61208} />
       </div>
     </div>
   );

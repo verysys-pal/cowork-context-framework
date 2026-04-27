@@ -1294,17 +1294,47 @@
   border-radius: 2px;
 }
 
+.main-content.cli-mode {
+  padding: 0;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+.main-content.cli-mode .dashboard-header {
+  padding: 10px 20px;
+  margin-bottom: 0;
+  border-bottom: 1px solid var(--border);
+  min-height: unset;
+}
+
+.main-content.cli-mode .dashboard-header h1 {
+  font-size: 1.1rem;
+  margin-bottom: 2px;
+}
+
+.main-content.cli-mode .dashboard-header p {
+  font-size: 0.78rem;
+}
+
 .cli-page {
   flex: 1;
   display: flex;
   flex-direction: column;
-  height: calc(100vh - 150px);
   background: black;
-  border-radius: 12px;
+  border-radius: 0;
   overflow: hidden;
-  border: 1px solid var(--border);
-  margin-top: 20px;
+  min-height: 0;
 }
+
+/* Outside of cli-mode, keep original spacing */
+.main-content:not(.cli-mode) .cli-page {
+  border-radius: 12px;
+  border: 1px solid var(--border);
+  margin: 0 30px 30px;
+  height: calc(100vh - 220px);
+}
+
 
 .cli-iframe {
   flex: 1;
@@ -1470,10 +1500,12 @@
 .workspace-top-actions {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 8px;
+  gap: 6px;
   width: 100%;
+  max-width: 100%;
   margin-top: 8px;
   box-sizing: border-box;
+  overflow: hidden;
 }
 
 .workspace-select-btn {

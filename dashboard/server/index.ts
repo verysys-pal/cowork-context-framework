@@ -4,6 +4,7 @@ import dotenv from 'dotenv';
 import path from 'path';
 import fs from 'fs';
 import { execFile, execSync, spawn } from 'child_process';
+import net from 'net';
 import os from 'os';
 import { fileURLToPath } from 'url';
 import { parseTraceability, generateMermaid } from './traceability.js';
@@ -61,11 +62,19 @@ const isWithinPath = (targetPath: string, parentPath: string): boolean => {
 
 const isHomeDirectory = (targetPath: string): boolean => path.resolve(targetPath) === HOME_PATH;
 
+const gitRootCache = new Map<string, string | null>();
 const findGitRoot = (startPath: string): string | null => {
+    const resolvedPath = path.resolve(startPath);
+    if (gitRootCache.has(resolvedPath)) return gitRootCache.get(resolvedPath)!;
+
     try {
-        const output = execSync('git rev-parse --show-toplevel', { cwd: startPath, encoding: 'utf8' }).trim();
-        return output || null;
+        // Suppress stderr to avoid log flooding when not in a git repo
+        const output = execSync('git rev-parse --show-toplevel 2>/dev/null', { cwd: resolvedPath, encoding: 'utf8' }).trim();
+        const result = output || null;
+        gitRootCache.set(resolvedPath, result);
+        return result;
     } catch {
+        gitRootCache.set(resolvedPath, null);
         return null;
     }
 };
@@ -1148,6 +1157,23 @@ app.get('/api/workspace/content', (req, res) => {
     } catch (error) {
         res.status(500).json({ error: 'Failed to read file content' });
     }
+});
+
+// Port status check endpoint (for monitor iframes)
+app.get('/api/port-status', (req, res) => {
+    const port = parseInt(req.query.port as string);
+    if (!port || port < 1 || port > 65535) {
+        return res.status(400).json({ error: 'Invalid port' });
+    }
+    const socket = new net.Socket();
+    const timeout = 500;
+    let open = false;
+    socket.setTimeout(timeout);
+    socket.on('connect', () => { open = true; socket.destroy(); });
+    socket.on('timeout', () => { socket.destroy(); });
+    socket.on('error', () => { socket.destroy(); });
+    socket.on('close', () => { res.json({ port, open }); });
+    socket.connect(port, '127.0.0.1');
 });
 
 // Fallback 404 handler
