@@ -1,5 +1,4 @@
-import ReactMarkdown from 'react-markdown'
-import remarkGfm from 'remark-gfm'
+import GitHubMarkdown from './GitHubMarkdown'
 import './MarkdownPreview.css'
 import './FilePreview.css'
 
@@ -184,9 +183,7 @@ function FilePreview({ file, onClose }: FilePreviewProps) {
           <iframe className="preview-pdf" src={file.dataUrl} title={file.fileName} />
         ) : file.kind === 'markdown' && file.content ? (
           <div className="markdown-body">
-            <ReactMarkdown remarkPlugins={[remarkGfm]}>
-              {file.content}
-            </ReactMarkdown>
+            <GitHubMarkdown content={file.content} />
           </div>
         ) : file.content && canRenderCode ? (
           <div className="preview-code">{renderCode(file.content, file.extension)}</div>

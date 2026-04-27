@@ -1,0 +1,9 @@
+{
+  "monitorFolder": "/home/mhdev/workspace_private/ai-doc-organizer/.cowork",
+  "excludeFolders": [
+    "node_modules",
+    ".git",
+    "dist",
+    "build"
+  ]
+}

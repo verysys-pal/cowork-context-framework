@@ -1,5 +1,4 @@
-import ReactMarkdown from 'react-markdown'
-import remarkGfm from 'remark-gfm'
+import GitHubMarkdown from './GitHubMarkdown'
 import './MarkdownPreview.css'
 
 interface MarkdownPreviewProps {
@@ -19,9 +18,7 @@ function MarkdownPreview({ content, onClose, fileName }: MarkdownPreviewProps) {
         <button className="preview-close" onClick={onClose}>×</button>
       </div>
       <div className="preview-content markdown-body">
-        <ReactMarkdown remarkPlugins={[remarkGfm]}>
-          {content}
-        </ReactMarkdown>
+        <GitHubMarkdown content={content} />
       </div>
     </div>
   )

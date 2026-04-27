@@ -1,0 +1,60 @@
+{
+  "links": [
+    {
+      "id": "2f198b6e-5ccb-4825-bce3-dbb7c4b99c8c",
+      "title": "Multica — Project Management for Human + Agent Teams",
+      "url": "http://localhost:3000/",
+      "note": "",
+      "tag": "localhost"
+    },
+    {
+      "id": "731b6d4f-5c65-4aab-b9e2-0d81e8eae2a7",
+      "title": "obsidian-vault/seCall",
+      "url": "http://localhost:8080/",
+      "note": "",
+      "tag": "localhost"
+    },
+    {
+      "id": "a3e6ae50-6b1a-4078-9a3d-af3c31e838e0",
+      "title": "AI 에이전트와 나눈 모든 대화를 검색",
+      "url": "https://github.com/hang-in/seCall",
+      "note": "",
+      "tag": "wiki"
+    },
+    {
+      "id": "00926461-02e5-4582-b3f2-66e04bef4779",
+      "title": "TestBed_GPU 서버 : LLM 구축하기",
+      "url": "https://www.notion.so/TestBed_GPU-LLM-32ebf2bd06b780c0827acb0c5bd004a6#32ebf2bd06b78081bfc8dfb52aa8f01e",
+      "note": "",
+      "tag": "Notion"
+    },
+    {
+      "id": "2b5ccc8d-72a6-4090-b65e-588b0d2a8f0f",
+      "title": "cowork-context-framework",
+      "url": "https://github.com/verysys-pal/cowork-context-framework/tree/main",
+      "note": "",
+      "tag": "verysys-pal"
+    },
+    {
+      "id": "d6081cce-ac76-411f-afcc-f82da9dd7a9d",
+      "title": "Ultraworkers - ULW",
+      "url": "https://discord.com/channels/1452487457085063218/1490536332961906829",
+      "note": "",
+      "tag": "omo"
+    },
+    {
+      "id": "caf15eb3-1831-40df-9f80-a8d33b28c1f3",
+      "title": "oh-my-agent",
+      "url": "https://github.com/first-fluke/oh-my-agent",
+      "note": "",
+      "tag": "omo"
+    },
+    {
+      "id": "abc860a9-b751-40d0-ad35-02ad75b89088",
+      "title": "oh-my-openagent",
+      "url": "https://github.com/code-yeongyu/oh-my-openagent",
+      "note": "",
+      "tag": "omo"
+    }
+  ]
+}

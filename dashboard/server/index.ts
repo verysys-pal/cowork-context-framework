@@ -3,7 +3,8 @@ import cors from 'cors';
 import dotenv from 'dotenv';
 import path from 'path';
 import fs from 'fs';
-import { execFile, execSync } from 'child_process';
+import { execFile, execSync, spawn } from 'child_process';
+import os from 'os';
 import { fileURLToPath } from 'url';
 import { parseTraceability, generateMermaid } from './traceability.js';
 
@@ -31,14 +32,34 @@ app.get('/', (req, res) => {
 app.get('/favicon.ico', (req, res) => res.status(204).end());
 
 const WORKSPACE_PATH = path.resolve(__dirname, '../../');
-let currentMonitorFolder = process.env.MONITOR_FOLDER || '.cowork';
+const HOME_PATH = os.homedir();
+const HARD_EXCLUDE_FOLDERS = new Set([
+    '.cache',
+    '.cargo',
+    '.config',
+    '.docker',
+    '.git',
+    '.local',
+    '.npm',
+    '.nvm',
+    '.rustup',
+    '.vscode-server',
+    'build',
+    'dist',
+    'node_modules',
+]);
+const DEFAULT_EXCLUDE_FOLDERS = ['node_modules', '.git', 'dist', 'build', '.cowork'];
+const MAX_SCAN_FILES = 2000;
+let currentMonitorFolder = process.env.MONITOR_FOLDER || '/home/mhdev/workspace_private';
 
-const getCOWORKPath = () => path.resolve(WORKSPACE_PATH, currentMonitorFolder);
+const getCOWORKPath = () => currentMonitorFolder;
 
 const isWithinPath = (targetPath: string, parentPath: string): boolean => {
     const relative = path.relative(parentPath, targetPath);
-    return relative === '' || (!relative.startsWith('..') && !path.isAbsolute(relative));
+    return relative === '' || !relative.startsWith('..');
 };
+
+const isHomeDirectory = (targetPath: string): boolean => path.resolve(targetPath) === HOME_PATH;
 
 const findGitRoot = (startPath: string): string | null => {
     try {
@@ -51,44 +72,202 @@ const findGitRoot = (startPath: string): string | null => {
 
 const GIT_ROOT = findGitRoot(WORKSPACE_PATH);
 
+let currentExcludeFolders: string[] = DEFAULT_EXCLUDE_FOLDERS;
+
+const shouldSkipDirectory = (folderName: string): boolean => (
+    HARD_EXCLUDE_FOLDERS.has(folderName) || currentExcludeFolders.includes(folderName)
+);
+
 const normalizeMonitorFolder = (folder: string): string | null => {
     const normalized = folder.trim();
     if (!normalized) return null;
 
-    const resolved = path.resolve(WORKSPACE_PATH, normalized);
-    const relative = path.relative(WORKSPACE_PATH, resolved);
-    if (relative.startsWith('..') || path.isAbsolute(relative)) return null;
+    // Resolve relative paths (like '..') against the CURRENT monitor folder, not the server root
+    const resolved = path.isAbsolute(normalized) 
+        ? normalized 
+        : path.resolve(currentMonitorFolder, normalized);
+    
+    // Check if within allowed limit (home directory)
+    const relativeToHome = path.relative(HOME_PATH, resolved);
+    if (relativeToHome.startsWith('..')) return null;
+
     if (!fs.existsSync(resolved) || !fs.statSync(resolved).isDirectory()) return null;
 
-    return relative || '.';
+    return resolved;
 };
+
+const CONFIG_PATH = path.join(__dirname, 'data/config.json');
+
+const readConfig = () => {
+    try {
+        if (fs.existsSync(CONFIG_PATH)) {
+            const data = JSON.parse(fs.readFileSync(CONFIG_PATH, 'utf8'));
+            if (data.monitorFolder) currentMonitorFolder = data.monitorFolder;
+            if (Array.isArray(data.excludeFolders)) {
+                currentExcludeFolders = data.excludeFolders.map((folder: unknown) => String(folder).trim()).filter(Boolean);
+            }
+        }
+    } catch (e) {
+        console.error('Config load error:', e);
+    }
+};
+
+const saveConfig = () => {
+    try {
+        const dataDir = path.dirname(CONFIG_PATH);
+        if (!fs.existsSync(dataDir)) {
+            fs.mkdirSync(dataDir, { recursive: true });
+        }
+        fs.writeFileSync(CONFIG_PATH, JSON.stringify({
+            monitorFolder: currentMonitorFolder,
+            excludeFolders: currentExcludeFolders
+        }, null, 2));
+    } catch (e) {
+        console.error('Config save error:', e);
+    }
+};
+
+const cliSessions = new Map<number, any>(); // port -> child_process
+let currentCliSettings = { fontSize: 14, bgColor: '#0d1117', lineHeight: 1.2 };
+
+const startCliSession = async (port: number, settings = currentCliSettings) => {
+    if (cliSessions.has(port)) {
+        await stopCliSession(port);
+        // Small delay to ensure port is released by the OS
+        await new Promise(resolve => setTimeout(resolve, 300));
+    }
+    
+    const ttydPath = path.resolve(WORKSPACE_PATH, '.bin/ttyd');
+    if (!fs.existsSync(ttydPath)) return null;
+    
+    const theme = JSON.stringify({
+        background: settings.bgColor,
+        foreground: '#ffffff',
+        cursor: '#ffffff'
+    });
+    
+    const args = [
+        '-p', port.toString(),
+        '-t', `fontSize=${settings.fontSize}`,
+        '-t', `lineHeight=${settings.lineHeight}`,
+        '-t', `theme=${theme}`,
+        'bash'
+    ];
+
+    const child = spawn(ttydPath, args, {
+        cwd: getCOWORKPath(),
+        detached: true,
+        stdio: 'ignore'
+    });
+    child.unref();
+    cliSessions.set(port, child);
+    return port;
+};
+
+const stopCliSession = async (port: number) => {
+    const child = cliSessions.get(port);
+    if (child) {
+        try {
+            // Kill the whole process group since ttyd spawns bash
+            if (child.pid) {
+                process.kill(-child.pid, 'SIGKILL');
+            }
+        } catch (e) {
+            try { process.kill(child.pid!, 'SIGKILL'); } catch (err) {}
+        }
+        cliSessions.delete(port);
+        await new Promise(resolve => setTimeout(resolve, 100));
+    }
+};
+
+// API for CLI Sessions
+app.get('/api/workspace/cli/sessions', (req, res) => {
+    res.json({
+        ports: Array.from(cliSessions.keys()),
+        settings: currentCliSettings
+    });
+});
+
+app.post('/api/workspace/cli/sessions', async (req, res) => {
+    const activePorts = Array.from(cliSessions.keys());
+    const nextPort = activePorts.length === 0 ? 7682 : Math.max(...activePorts) + 1;
+    const port = (nextPort === 61208) ? nextPort + 1 : nextPort;
+    const started = await startCliSession(port);
+    if (started) {
+        res.json({ port: started });
+    } else {
+        res.status(500).json({ error: 'Failed to start session' });
+    }
+});
+
+app.post('/api/workspace/cli/settings', async (req, res) => {
+    const settings = req.body;
+    currentCliSettings = { ...currentCliSettings, ...settings };
+    
+    // Restart all sessions with new settings sequentially to avoid port race
+    const activePorts = Array.from(cliSessions.keys());
+    for (const port of activePorts) {
+        await startCliSession(port, currentCliSettings);
+    }
+    
+    res.json({ success: true, settings: currentCliSettings });
+});
+
+app.delete('/api/workspace/cli/sessions/:port', async (req, res) => {
+    const port = parseInt(req.params.port);
+    await stopCliSession(port);
+    res.json({ success: true });
+});
 
 const listAvailableMonitorFolders = (): string[] => {
     const basePath = getCOWORKPath();
 
     if (!fs.existsSync(basePath) || !fs.statSync(basePath).isDirectory()) {
-        return ['.'];
+        return [HOME_PATH];
     }
 
-    const folders = new Set<string>([currentMonitorFolder]);
-    const parentFolder = path.relative(WORKSPACE_PATH, path.dirname(basePath));
-    if (parentFolder && !parentFolder.startsWith('..') && !path.isAbsolute(parentFolder)) {
-        folders.add(parentFolder || '.');
-    }
+    const folders = new Set<string>([
+        currentMonitorFolder,
+        WORKSPACE_PATH,
+        HOME_PATH,
+    ]);
 
-    for (const entry of fs.readdirSync(basePath, { withFileTypes: true })) {
-        if (!entry.isDirectory() || entry.name === 'node_modules') continue;
-        const relativePath = path.relative(WORKSPACE_PATH, path.join(basePath, entry.name));
-        if (relativePath && !relativePath.startsWith('..') && !path.isAbsolute(relativePath)) {
-            folders.add(relativePath || '.');
+    if (GIT_ROOT) folders.add(GIT_ROOT);
+
+    for (const quickFolder of [
+        path.join(WORKSPACE_PATH, 'dashboard'),
+        path.dirname(WORKSPACE_PATH),
+    ]) {
+        if (fs.existsSync(quickFolder) && fs.statSync(quickFolder).isDirectory()) {
+            folders.add(quickFolder);
         }
+    }
+
+    const parentFolder = path.dirname(basePath);
+    const relToHomeFromParent = path.relative(HOME_PATH, parentFolder);
+    
+    if (!relToHomeFromParent.startsWith('..')) {
+        folders.add(parentFolder);
+    }
+
+    try {
+        for (const entry of fs.readdirSync(basePath, { withFileTypes: true })) {
+            if (!entry.isDirectory()) continue;
+            if (shouldSkipDirectory(entry.name)) continue;
+            
+            const fullPath = path.join(basePath, entry.name);
+            const relToHome = path.relative(HOME_PATH, fullPath);
+            if (!relToHome.startsWith('..')) {
+                folders.add(fullPath);
+            }
+        }
+    } catch (e) {
+        // ignore read errors
     }
 
     return Array.from(folders).sort((a, b) => {
         if (a === currentMonitorFolder) return -1;
         if (b === currentMonitorFolder) return 1;
-        if (a === '.') return -1;
-        if (b === '.') return 1;
         return a.localeCompare(b);
     });
 };
@@ -122,6 +301,18 @@ type OpencodeUsageState = {
     loading: boolean;
     updatedAt: string | null;
     error: string | null;
+};
+
+type StoredLink = {
+    id: string;
+    title: string;
+    url: string;
+    note: string;
+    tag: string;
+};
+
+type LinkStore = {
+    links: StoredLink[];
 };
 
 type FilePreviewKind = 'markdown' | 'text' | 'image' | 'pdf' | 'unknown';
@@ -346,6 +537,140 @@ const opencodeUsageState: OpencodeUsageState = {
     error: null,
 };
 let opencodeUsageRefreshPromise: Promise<void> | null = null;
+let opencodeWebProcess: ReturnType<typeof spawn> | null = null;
+let opencodeBinaryPath: string | null = null;
+const OPENCODE_WEB_HOST = '127.0.0.1';
+const OPENCODE_WEB_PORT = Number(process.env.OPENCODE_WEB_PORT ?? 4096);
+const LINK_STORE_PATH = path.resolve(__dirname, 'data/link-store.json');
+const NOTES_DIR = path.resolve(__dirname, 'data/notes');
+const EMPTY_LINK_STORE: LinkStore = { links: [] };
+
+const ensureLinkStoreDir = () => {
+    fs.mkdirSync(path.dirname(LINK_STORE_PATH), { recursive: true });
+    fs.mkdirSync(NOTES_DIR, { recursive: true });
+};
+
+const normalizeStoredLink = (value: unknown): StoredLink | null => {
+    if (!value || typeof value !== 'object') return null;
+
+    const candidate = value as Partial<StoredLink>;
+    if (typeof candidate.id !== 'string' || typeof candidate.title !== 'string' || typeof candidate.url !== 'string') {
+        return null;
+    }
+
+    return {
+        id: candidate.id,
+        title: candidate.title,
+        url: candidate.url,
+        note: typeof candidate.note === 'string' ? candidate.note : '',
+        tag: typeof candidate.tag === 'string' ? (candidate.tag.trim() || 'General') : 'General',
+    };
+};
+
+const readLinkStore = (): LinkStore => {
+    try {
+        if (!fs.existsSync(LINK_STORE_PATH)) {
+            return EMPTY_LINK_STORE;
+        }
+
+        const raw = fs.readFileSync(LINK_STORE_PATH, 'utf-8').trim();
+        if (!raw) return EMPTY_LINK_STORE;
+
+        const parsed = JSON.parse(raw) as unknown;
+        if (!parsed || typeof parsed !== 'object' || !Array.isArray((parsed as { links?: unknown }).links)) {
+            return EMPTY_LINK_STORE;
+        }
+
+        const links = ((parsed as { links: unknown[] }).links)
+            .map((item) => normalizeStoredLink(item))
+            .filter((item): item is StoredLink => item !== null)
+            .map((item) => {
+                const notePath = path.join(NOTES_DIR, `${item.id}.md`);
+                if (fs.existsSync(notePath)) {
+                    try {
+                        const noteContent = fs.readFileSync(notePath, 'utf-8');
+                        return { ...item, note: noteContent };
+                    } catch (err) {
+                        console.error(`Failed to read note file for ${item.id}:`, err);
+                    }
+                } else if (item.note) {
+                    // Auto-migration: save note from JSON to separate file
+                    try {
+                        ensureLinkStoreDir();
+                        fs.writeFileSync(notePath, item.note, 'utf-8');
+                        console.log(`Migrated note for link ${item.id} to file.`);
+                    } catch (err) {
+                        console.error(`Failed to migrate note for ${item.id}:`, err);
+                    }
+                }
+                return item;
+            });
+
+        return { links };
+    } catch (error) {
+        console.error('Link store read error:', error);
+        return EMPTY_LINK_STORE;
+    }
+};
+
+const writeLinkStore = (store: LinkStore): LinkStore => {
+    ensureLinkStoreDir();
+
+    // Map to save to JSON (strip notes to avoid duplication)
+    const normalized: LinkStore = {
+        links: store.links.map((item) => ({
+            id: item.id,
+            title: item.title,
+            url: item.url,
+            note: '', // Notes are stored in separate files
+            tag: typeof item.tag === 'string' ? (item.tag.trim() || 'General') : 'General',
+        })),
+    };
+
+    // Save individual note files
+    const validIds = new Set(store.links.map((l) => `${l.id}.md`));
+    for (const item of store.links) {
+        try {
+            const notePath = path.join(NOTES_DIR, `${item.id}.md`);
+            fs.writeFileSync(notePath, item.note || '', 'utf-8');
+        } catch (err) {
+            console.error(`Failed to write note file for ${item.id}:`, err);
+        }
+    }
+
+    // Cleanup notes for links that no longer exist
+    try {
+        const existingFiles = fs.readdirSync(NOTES_DIR);
+        for (const file of existingFiles) {
+            if (file.endsWith('.md') && !validIds.has(file)) {
+                fs.unlinkSync(path.join(NOTES_DIR, file));
+            }
+        }
+    } catch (err) {
+        console.error('Failed to cleanup note files:', err);
+    }
+
+    const tempPath = `${LINK_STORE_PATH}.tmp`;
+    fs.writeFileSync(tempPath, `${JSON.stringify(normalized, null, 2)}\n`, 'utf-8');
+    fs.renameSync(tempPath, LINK_STORE_PATH);
+    return store;
+};
+
+const resolveOpencodeBinary = (): string => {
+    if (opencodeBinaryPath) return opencodeBinaryPath;
+
+    try {
+        const resolved = execSync('command -v opencode', { cwd: WORKSPACE_PATH, encoding: 'utf8' }).trim();
+        if (!resolved) {
+            throw new Error('opencode binary not found in PATH');
+        }
+
+        opencodeBinaryPath = resolved;
+        return resolved;
+    } catch (error) {
+        throw new Error(error instanceof Error ? error.message : 'Failed to resolve opencode binary');
+    }
+};
 
 const recordBaselineModels = (snapshot: OpencodeUsageSnapshot) => {
     for (const model of snapshot.order) {
@@ -425,6 +750,31 @@ const refreshOpencodeUsageState = async (): Promise<void> => {
     return opencodeUsageRefreshPromise;
 };
 
+const getOpencodeWebUrl = (): string => `http://${OPENCODE_WEB_HOST}:${OPENCODE_WEB_PORT}`;
+
+const launchOpencodeWeb = (): { alreadyRunning: boolean; pid: number | undefined; url: string } => {
+    if (opencodeWebProcess && opencodeWebProcess.exitCode === null && !opencodeWebProcess.killed) {
+        return { alreadyRunning: true, pid: opencodeWebProcess.pid ?? undefined, url: getOpencodeWebUrl() };
+    }
+
+    const opencodeBinary = resolveOpencodeBinary();
+    const child = spawn(opencodeBinary, ['web', '--hostname', OPENCODE_WEB_HOST, '--port', String(OPENCODE_WEB_PORT)], {
+        cwd: WORKSPACE_PATH,
+        detached: true,
+        stdio: 'ignore',
+    });
+
+    child.unref();
+    opencodeWebProcess = child;
+    child.on('exit', () => {
+        if (opencodeWebProcess === child) {
+            opencodeWebProcess = null;
+        }
+    });
+
+    return { alreadyRunning: false, pid: child.pid ?? undefined, url: getOpencodeWebUrl() };
+};
+
 void refreshOpencodeUsageState();
 setInterval(() => {
     void refreshOpencodeUsageState();
@@ -432,44 +782,59 @@ setInterval(() => {
 
 // GET config (to tell frontend what folder we are monitoring)
 app.get('/api/workspace/config', (req, res) => {
-    res.json({ monitorFolder: currentMonitorFolder, availableFolders: listAvailableMonitorFolders() });
+    res.json({ 
+        monitorFolder: currentMonitorFolder, 
+        availableFolders: listAvailableMonitorFolders(),
+        excludeFolders: currentExcludeFolders
+    });
 });
 
 app.put('/api/workspace/config', (req, res) => {
-    const { monitorFolder } = req.body ?? {};
-    if (typeof monitorFolder !== 'string') {
-        return res.status(400).json({ error: 'monitorFolder must be a string' });
+    const { monitorFolder, excludeFolders } = req.body ?? {};
+    
+    if (typeof monitorFolder === 'string') {
+        const normalized = normalizeMonitorFolder(monitorFolder);
+        if (normalized !== null) {
+            currentMonitorFolder = normalized;
+        }
     }
 
-    const normalized = normalizeMonitorFolder(monitorFolder);
-    if (normalized === null) {
-        return res.status(400).json({ error: 'Invalid monitor folder' });
-    }
+        if (Array.isArray(excludeFolders)) {
+            currentExcludeFolders = Array.from(new Set(
+                excludeFolders.map(f => String(f).trim()).filter(Boolean)
+            ));
+        }
 
-    currentMonitorFolder = normalized;
-    res.json({ monitorFolder: currentMonitorFolder, availableFolders: listAvailableMonitorFolders() });
+    saveConfig();
+
+    res.json({ 
+        monitorFolder: currentMonitorFolder, 
+        availableFolders: listAvailableMonitorFolders(),
+        excludeFolders: currentExcludeFolders
+    });
 });
 
 // Helper to get git status of files
-const getGitStatus = () => {
-    if (!GIT_ROOT) {
+const getGitStatus = (baseDir: string) => {
+    const gitRoot = findGitRoot(baseDir);
+    if (!gitRoot) {
         return {};
     }
 
     try {
-        const output = execSync('git status --porcelain=v1 -uall', { cwd: GIT_ROOT }).toString();
+        const output = execSync('git status --porcelain=v1 -uall', { cwd: gitRoot }).toString();
         const statusMap: Record<string, string> = {};
         
         output.split('\n').forEach(line => {
             if (!line) return;
             const status = line.substring(0, 2).trim() || line.substring(0, 2);
             const filePath = line.substring(3).trim();
-            statusMap[filePath] = status;
+            const fullPath = path.resolve(gitRoot, filePath);
+            statusMap[fullPath] = status;
         });
         
         return statusMap;
     } catch (error) {
-        console.error('Git status error:', error);
         return {};
     }
 };
@@ -478,14 +843,24 @@ const getGitStatus = () => {
 app.get('/api/workspace/folders', (req, res) => {
     try {
         const coworkPath = getCOWORKPath();
-        if (!fs.existsSync(coworkPath)) {
-            return res.status(404).json({ error: '.cowork folder not found' });
+        const targetRelative = typeof req.query.folder === 'string' ? req.query.folder : '.';
+        const targetPath = path.resolve(coworkPath, targetRelative);
+
+        if (!fs.existsSync(targetPath)) {
+            return res.status(404).json({ error: 'Directory not found' });
         }
         
-        const subfolders = fs.readdirSync(coworkPath)
-            .filter(file => fs.statSync(path.join(coworkPath, file)).isDirectory());
+        const subfolders = fs.readdirSync(targetPath, { withFileTypes: true })
+            .filter(entry => {
+                if (!entry.isDirectory()) return false;
+                return !shouldSkipDirectory(entry.name);
+            })
+            .map(entry => {
+                const relativePath = path.relative(coworkPath, path.join(targetPath, entry.name));
+                return relativePath;
+            });
         
-        // Always include the root directory itself to view top-level files
+        // Always include the current directory itself
         res.json(['.', ...subfolders]);
     } catch (error) {
         res.status(500).json({ error: 'Failed to read folders' });
@@ -497,29 +872,49 @@ app.get('/api/workspace/files', (req, res) => {
     const { folder } = req.query;
     if (!folder) return res.status(400).json({ error: 'Folder query param required' });
     
-    const coworkPath = getCOWORKPath();
-    const folderPath = path.resolve(coworkPath, folder as string);
-    if (!isWithinPath(folderPath, coworkPath)) return res.status(403).json({ error: 'Folder outside monitor root' });
+    const monitorRoot = getCOWORKPath();
+    const folderPath = path.isAbsolute(folder as string) ? (folder as string) : path.resolve(monitorRoot, folder as string);
+
+    if (isHomeDirectory(monitorRoot)) {
+        return res.json([]);
+    }
+    
+    // Check home directory boundary
+    const relativeToHome = path.relative(HOME_PATH, folderPath);
+    if (relativeToHome.startsWith('..')) {
+        return res.status(403).json({ error: 'Folder outside allowed area' });
+    }
+
     if (!fs.existsSync(folderPath)) return res.status(404).json({ error: 'Folder not found' });
     
     try {
-        const gitStatus = getGitStatus();
+        const gitStatus = getGitStatus(folderPath);
         const fileList: any[] = [];
         
         const scanDir = (dir: string) => {
-            const entries = fs.readdirSync(dir, { withFileTypes: true });
+            let entries: fs.Dirent[];
+            try {
+                entries = fs.readdirSync(dir, { withFileTypes: true });
+            } catch {
+                return;
+            }
+
             for (const entry of entries) {
+                if (fileList.length >= MAX_SCAN_FILES) return;
                 const fullPath = path.join(dir, entry.name);
                 if (entry.isDirectory()) {
+                    if (shouldSkipDirectory(entry.name)) {
+                        continue;
+                    }
                     scanDir(fullPath);
+                    if (fileList.length >= MAX_SCAN_FILES) return;
                 } else {
-                    const relativePath = path.relative(WORKSPACE_PATH, fullPath);
                     const folderRelativePath = path.relative(folderPath, fullPath);
-                    fileList.push({
-                        name: entry.name,
-                        path: folderRelativePath,
-                        status: gitStatus[relativePath] || 'none'
-                    });
+                        fileList.push({
+                            name: entry.name,
+                            path: folderRelativePath,
+                            status: gitStatus[fullPath] || 'none'
+                        });
                 }
             }
         };
@@ -532,55 +927,95 @@ app.get('/api/workspace/files', (req, res) => {
     }
 });
 
+// Load initial config
+readConfig();
+
 // GET change history grouped by date
 app.get('/api/workspace/history', (req, res) => {
     try {
-        if (!GIT_ROOT) {
+        const monitorPath = getCOWORKPath();
+        if (!fs.existsSync(monitorPath)) {
             return res.json([]);
         }
 
-        // Get git log with date and changed files
-        const output = execSync('git log --date=short --pretty=format:"COMMIT:%ad" --name-status', { cwd: GIT_ROOT }).toString();
+        if (isHomeDirectory(monitorPath)) {
+            return res.json([]);
+        }
+
+        const files: { name: string; path: string; mtime: Date }[] = [];
         
-        const history: Record<string, Map<string, { name: string; path: string; status: string }>> = {};
-        let currentDate = '';
-        
-        output.split('\n').forEach(line => {
-            if (line.startsWith('COMMIT:')) {
-                currentDate = line.replace('COMMIT:', '');
-                if (!history[currentDate]) history[currentDate] = new Map();
-            } else if (line && currentDate) {
-                const [status, filePath] = line.split('\t');
-                if (!status || !filePath) {
-                    return;
-                }
-                const dateEntries = history[currentDate];
-                if (filePath && dateEntries) {
-                    const monitorPath = currentMonitorFolder === '.' ? '' : currentMonitorFolder;
-                    const withinFolder = monitorPath === '' || isWithinPath(path.resolve(WORKSPACE_PATH, filePath), path.resolve(WORKSPACE_PATH, monitorPath));
-                    if (withinFolder) {
-                        if (!dateEntries.has(filePath)) {
-                            dateEntries.set(filePath, {
-                                name: path.basename(filePath),
-                                path: filePath,
-                                status: status // 'M', 'A', 'D'
-                            });
-                        }
+        const scan = (dir: string) => {
+            let entries: fs.Dirent[];
+            try {
+                entries = fs.readdirSync(dir, { withFileTypes: true });
+            } catch {
+                return;
+            }
+
+            for (const entry of entries) {
+                if (files.length >= MAX_SCAN_FILES) return;
+                const fullPath = path.join(dir, entry.name);
+                const folderName = entry.name;
+
+                if (entry.isDirectory()) {
+                    if (shouldSkipDirectory(folderName)) {
+                        continue;
+                    }
+
+                    scan(fullPath);
+                    if (files.length >= MAX_SCAN_FILES) return;
+                } else {
+                    try {
+                        const stats = fs.statSync(fullPath);
+                        files.push({
+                            name: entry.name,
+                            path: path.relative(currentMonitorFolder, fullPath),
+                            mtime: stats.mtime
+                        });
+                    } catch (e) {
+                        // Skip files that can't be accessed
                     }
                 }
             }
+        };
+
+        scan(monitorPath);
+
+        // Group by date (YYYY-MM-DD)
+        const grouped: Record<string, { name: string; path: string; status: string }[]> = {};
+        files.forEach(f => {
+            const dateParts = f.mtime.toISOString().split('T');
+            const date = dateParts[0];
+            if (date) {
+                if (!grouped[date]) {
+                    grouped[date] = [];
+                }
+                
+                // Avoid duplicate paths
+                const dateEntries = grouped[date];
+                if (!dateEntries.some((item: { path: string }) => item.path === f.path)) {
+                    dateEntries.push({
+                        name: f.name,
+                        path: f.path,
+                        status: 'none'
+                    });
+                }
+            }
         });
-        
-        // Convert to array and filter out empty dates
-        const result = Object.entries(history)
-            .filter(([_, files]) => files.size > 0)
-            .map(([date, files]) => ({ date, files: Array.from(files.values()) }))
-            .sort((a, b) => b.date.localeCompare(a.date));
-        
-        res.json(result);
+
+        // Convert to array and sort by date descending
+        const historyList = Object.entries(grouped)
+            .sort((a, b) => b[0].localeCompare(a[0]))
+            .map(([date, dateFiles]) => ({
+                date,
+                files: dateFiles.sort((a, b) => a.name.localeCompare(b.name))
+            }))
+            .slice(0, 30); // Last 30 unique modification dates
+
+        res.json(historyList);
     } catch (error) {
-        console.error('Git log error:', error);
-        res.status(500).json({ error: 'Failed to read history' });
+        console.error('History read error:', error);
+        res.status(500).json({ error: 'Failed to read file history' });
     }
 });
 
@@ -603,6 +1038,65 @@ app.get('/api/workspace/opencode-usage', (req, res) => {
         error: opencodeUsageState.error,
         rows: opencodeUsageState.rows,
     });
+});
+
+app.get('/api/workspace/links', (req, res) => {
+    res.json(readLinkStore());
+});
+
+app.get('/api/workspace/links/:id/note', (req, res) => {
+    try {
+        const { id } = req.params;
+        const notePath = path.join(NOTES_DIR, `${id}.md`);
+        if (fs.existsSync(notePath)) {
+            const noteContent = fs.readFileSync(notePath, 'utf-8');
+            res.json({ note: noteContent });
+        } else {
+            res.json({ note: '' });
+        }
+    } catch (error) {
+        console.error('Note read error:', error);
+        res.status(500).json({ error: 'Failed to read note file' });
+    }
+});
+
+app.put('/api/workspace/links', (req, res) => {
+    try {
+        const rawLinks = req.body?.links;
+        if (!Array.isArray(rawLinks)) {
+            return res.status(400).json({ error: 'links must be an array' });
+        }
+
+        const links = rawLinks
+            .map((item) => normalizeStoredLink(item))
+            .filter((item): item is StoredLink => item !== null);
+
+        const saved = writeLinkStore({ links });
+        res.json(saved);
+    } catch (error) {
+        console.error('Link store write error:', error);
+        res.status(500).json({ error: error instanceof Error ? error.message : 'Failed to save links' });
+    }
+});
+
+app.post('/api/workspace/opencode-web', (req, res) => {
+    try {
+        const result = launchOpencodeWeb();
+        res.json({
+            started: true,
+            alreadyRunning: result.alreadyRunning,
+            pid: result.pid,
+            url: result.url,
+            message: result.alreadyRunning
+                ? 'OpenCode Web is already running.'
+                : 'OpenCode Web is starting in the background.',
+        });
+    } catch (error) {
+        console.error('OpenCode Web launch error:', error);
+        res.status(500).json({
+            error: error instanceof Error ? error.message : 'Failed to start OpenCode Web',
+        });
+    }
 });
 
 // GET file content
