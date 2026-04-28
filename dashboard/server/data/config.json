@@ -1,5 +1,5 @@
 {
-  "monitorFolder": "/home/mhdev/workspace_private/nexusSynapse",
+  "monitorFolder": "/home/mhdev",
   "excludeFolders": [
     "node_modules",
     ".git",

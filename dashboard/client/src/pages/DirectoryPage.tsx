@@ -3,12 +3,14 @@ import type { GitFile, HistoryItem, FilePreviewData } from '../types';
 import { iconForExplorerFile, statusLabelForFile, filterExcludedFiles } from '../utils';
 import FilePreview from '../components/FilePreview';
 
+export type MiddlePanelMode = 'history' | 'navigation' | 'hidden';
+
 export interface DirectoryPageProps {
   selectedMonitorFolder: string;
   monitorFolder: string;
   setSelectedMonitorFolder: (v: string) => void;
   setMonitorFolderInput: (v: string) => void;
-  setMiddlePanelMode: (v: 'history' | 'navigation') => void;
+  setMiddlePanelMode: (v: MiddlePanelMode) => void;
   handleMonitoringToggle: () => void;
   monitoringActive: boolean;
   monitorFolderUpdating: boolean;
@@ -23,7 +25,7 @@ export interface DirectoryPageProps {
   previewFile: FilePreviewData | null;
   setPreviewFile: (file: FilePreviewData | null) => void;
   handleFileClick: (file: GitFile) => void;
-  middlePanelMode: 'history' | 'navigation';
+  middlePanelMode: MiddlePanelMode;
   history: HistoryItem[];
   handleWorkspaceHistorySelect: (item: HistoryItem) => void;
   excludeFolders: string[];
@@ -62,6 +64,9 @@ export function DirectoryPage({
   handleAddExcludeFolder,
   handleRemoveExcludeFolder,
 }: DirectoryPageProps): ReactElement {
+  const showNavigationMode = middlePanelMode === 'navigation' && !monitoringActive
+  const showHiddenMode = middlePanelMode === 'hidden' && !monitoringActive
+
   return (
     <div className="workspace-page">
       <section className="workspace-explorer">
@@ -223,22 +228,40 @@ export function DirectoryPage({
               <span className="status-label" style={{ opacity: monitoringActive ? 1 : 0.6 }}>
                 {monitoringActive ? 'LIVE MONITORING' : 'SCAN INACTIVE'}
               </span>
-              <button 
-                type="button"
-                className="workspace-panel-mode-toggle"
-                onClick={() => setSelectedFolder(null)}
-                style={{ 
-                  background: 'none', border: 'none', color: '#6366f1', 
-                  cursor: 'pointer', fontSize: '0.75rem', fontWeight: 600 
-                }}
-              >
-                {(!monitoringActive && selectedFolder) ? 'View History' : ''}
-              </button>
+              <div className="workspace-panel-mode-group" aria-label="Middle panel mode">
+                <button
+                  type="button"
+                  className={`workspace-panel-mode-toggle ${middlePanelMode === 'history' || monitoringActive ? 'is-active' : ''}`}
+                  onClick={() => {
+                    setSelectedFolder(null)
+                    setMiddlePanelMode('history')
+                  }}
+                  disabled={monitoringActive}
+                >
+                  History
+                </button>
+                <button
+                  type="button"
+                  className={`workspace-panel-mode-toggle ${showNavigationMode ? 'is-active' : ''}`}
+                  onClick={() => setMiddlePanelMode('navigation')}
+                  disabled={monitoringActive}
+                >
+                  Navigation
+                </button>
+                <button
+                  type="button"
+                  className={`workspace-panel-mode-toggle ${showHiddenMode ? 'is-active' : ''}`}
+                  onClick={() => setMiddlePanelMode('hidden')}
+                  disabled={monitoringActive}
+                >
+                  Hide Navigation
+                </button>
+              </div>
             </div>
           </div>
 
           <div className="directory-history-list">
-            {(middlePanelMode === 'navigation' && !monitoringActive) ? (
+            {showNavigationMode ? (
               /* Navigation Mode */
               <div className="workspace-navigation-view">
                 <button 
@@ -279,6 +302,17 @@ export function DirectoryPage({
                     <span className="nav-item-type">Folder</span>
                   </button>
                 ))}
+              </div>
+            ) : showHiddenMode ? (
+              <div className="workspace-navigation-hidden">
+                <div className="usage-empty">Navigation hidden.</div>
+                <button
+                  type="button"
+                  className="workspace-panel-mode-toggle"
+                  onClick={() => setMiddlePanelMode('navigation')}
+                >
+                  Show Navigation
+                </button>
               </div>
             ) : (
               /* History Mode */

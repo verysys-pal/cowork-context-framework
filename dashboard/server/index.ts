@@ -3,7 +3,7 @@ import cors from 'cors';
 import dotenv from 'dotenv';
 import path from 'path';
 import fs from 'fs';
-import { execFile, execSync, spawn } from 'child_process';
+import { execFile, execFileSync, execSync, spawn, type ChildProcess } from 'child_process';
 import net from 'net';
 import os from 'os';
 import { fileURLToPath } from 'url';
@@ -136,53 +136,273 @@ const saveConfig = () => {
     }
 };
 
-const cliSessions = new Map<number, any>(); // port -> child_process
+interface CliPaneStatus {
+    windowIndex: number;
+    paneIndex: number;
+    active: boolean;
+    command: string;
+    path: string;
+    title: string;
+}
+
+interface TmuxSessionStatusBase {
+    sessionName: string;
+    running: boolean;
+    windows: number;
+    attached: number;
+    paneCount: number;
+    activePaneCommand: string;
+    activePanePath: string;
+    activePaneTitle: string;
+    panes: CliPaneStatus[];
+}
+
+type CliSessionStatus = {
+    port: number;
+    source: 'managed' | 'external';
+} & TmuxSessionStatusBase;
+
+type ExternalTmuxSessionStatus = TmuxSessionStatusBase;
+
+interface CliSessionRecord {
+    port: number;
+    sessionName: string;
+    process: ChildProcess;
+    preserveTmux: boolean;
+}
+
+const cliSessions = new Map<number, CliSessionRecord>();
 let currentCliSettings = { fontSize: 14, bgColor: '#0d1117', lineHeight: 1.2 };
 
-const startCliSession = async (port: number, settings = currentCliSettings) => {
+const tmuxSessionNameForPort = (port: number): string => `cowork-cli-${port}`;
+
+const runTmux = (args: string[], cwd = getCOWORKPath()): string => {
+    return execFileSync('tmux', args, {
+        cwd,
+        encoding: 'utf8',
+        stdio: ['ignore', 'pipe', 'pipe'],
+    });
+};
+
+const parsePaneLine = (line: string): CliPaneStatus | null => {
+    const [windowIndexRaw, paneIndexRaw, activeRaw, command = '', panePath = '', title = ''] = line.split('\t');
+    const windowIndex = Number(windowIndexRaw);
+    const paneIndex = Number(paneIndexRaw);
+    if (Number.isNaN(windowIndex) || Number.isNaN(paneIndex)) return null;
+
+    return {
+        windowIndex,
+        paneIndex,
+        active: activeRaw === '1',
+        command,
+        path: panePath,
+        title,
+    };
+};
+
+const readTmuxSessionStatus = (sessionName: string): TmuxSessionStatusBase | null => {
+    try {
+        const sessionOutput = runTmux([
+            'display-message',
+            '-p',
+            '-t',
+            sessionName,
+            '#{session_name}\t#{session_windows}\t#{session_attached}',
+        ]).trim();
+
+        if (!sessionOutput) return null;
+
+        const [name = sessionName, windowsRaw = '0', attachedRaw = '0'] = sessionOutput.split('\t');
+        const paneOutput = runTmux([
+            'list-panes',
+            '-t',
+            sessionName,
+            '-F',
+            '#{window_index}\t#{pane_index}\t#{pane_active}\t#{pane_current_command}\t#{pane_current_path}\t#{pane_title}',
+        ]).trim();
+
+        const panes = paneOutput
+            ? paneOutput.split('\n').map(parsePaneLine).filter((pane): pane is CliPaneStatus => pane !== null)
+            : [];
+
+        const activePane = panes.find((pane) => pane.active) ?? panes[0] ?? {
+            windowIndex: 0,
+            paneIndex: 0,
+            active: true,
+            command: 'unknown',
+            path: getCOWORKPath(),
+            title: sessionName,
+        };
+
+        return {
+            sessionName: name,
+            running: true,
+            windows: Number(windowsRaw) || 0,
+            attached: Number(attachedRaw) || 0,
+            paneCount: panes.length,
+            activePaneCommand: activePane.command,
+            activePanePath: activePane.path,
+            activePaneTitle: activePane.title,
+            panes,
+        };
+    } catch {
+        return null;
+    }
+};
+
+const readCliSessionStatus = (port: number, sessionName: string): CliSessionStatus | null => {
+    const status = readTmuxSessionStatus(sessionName);
+    return status ? { port, source: 'managed', ...status } : null;
+};
+
+const listTmuxSessionNames = (): string[] => {
+    try {
+        const output = runTmux([
+            'list-sessions',
+            '-F',
+            '#{session_name}',
+        ]).trim();
+
+        return output
+            ? output.split('\n').map((sessionName) => sessionName.trim()).filter(Boolean)
+            : [];
+    } catch {
+        return [];
+    }
+};
+
+const collectExternalTmuxSessionStatuses = (): ExternalTmuxSessionStatus[] => {
+    const dashboardSessionNames = new Set(Array.from(cliSessions.values()).map((record) => record.sessionName));
+    return listTmuxSessionNames()
+        .filter((sessionName) => !dashboardSessionNames.has(sessionName))
+        .map((sessionName) => readTmuxSessionStatus(sessionName))
+        .filter((session): session is ExternalTmuxSessionStatus => session !== null)
+        .sort((a, b) => a.sessionName.localeCompare(b.sessionName));
+};
+
+const getNextCliPort = (): number => {
+    const activePorts = Array.from(cliSessions.keys());
+    const nextPort = activePorts.length === 0 ? 7682 : Math.max(...activePorts) + 1;
+    return nextPort === 61208 ? nextPort + 1 : nextPort;
+};
+
+const spawnTtydForTmux = (port: number, tmuxArgs: string[], cwd = getCOWORKPath()): ChildProcess | null => {
+    const ttydPath = path.resolve(WORKSPACE_PATH, '.bin/ttyd');
+    if (!fs.existsSync(ttydPath)) return null;
+
+    const child = spawn(ttydPath, ['-p', port.toString(), ...tmuxArgs], {
+        cwd,
+        detached: true,
+        stdio: 'ignore',
+    });
+    child.unref();
+    return child;
+};
+
+const collectCliSessionStatuses = (): CliSessionStatus[] => {
+    return Array.from(cliSessions.values())
+        .map((record) => {
+            const source: 'managed' | 'external' = record.preserveTmux ? 'external' : 'managed';
+            const status = readCliSessionStatus(record.port, record.sessionName);
+            if (status) {
+                return { ...status, source };
+            }
+
+            return {
+                port: record.port,
+                source,
+                sessionName: record.sessionName,
+                running: false,
+                windows: 0,
+                attached: 0,
+                paneCount: 0,
+                activePaneCommand: 'stopped',
+                activePanePath: getCOWORKPath(),
+                activePaneTitle: record.sessionName,
+                panes: [],
+            };
+        })
+        .sort((a, b) => a.port - b.port);
+};
+
+const startCliSession = async (
+    port: number,
+    settings = currentCliSettings,
+    options?: {
+        sessionName?: string;
+        preserveTmux?: boolean;
+        attach?: boolean;
+    }
+) => {
     if (cliSessions.has(port)) {
         await stopCliSession(port);
         // Small delay to ensure port is released by the OS
         await new Promise(resolve => setTimeout(resolve, 300));
     }
-    
-    const ttydPath = path.resolve(WORKSPACE_PATH, '.bin/ttyd');
-    if (!fs.existsSync(ttydPath)) return null;
-    
+
     const theme = JSON.stringify({
         background: settings.bgColor,
         foreground: '#ffffff',
         cursor: '#ffffff'
     });
-    
-    const args = [
-        '-p', port.toString(),
+    const sessionName = options?.sessionName ?? tmuxSessionNameForPort(port);
+    const runningSession = readTmuxSessionStatus(sessionName);
+    if (options?.attach && !runningSession) return null;
+
+    const child = spawnTtydForTmux(port, [
         '-t', `fontSize=${settings.fontSize}`,
         '-t', `lineHeight=${settings.lineHeight}`,
         '-t', `theme=${theme}`,
-        'bash'
-    ];
+        'tmux',
+        ...(options?.attach
+            ? ['attach', '-t', sessionName]
+            : [
+                'new-session',
+                '-A',
+                '-D',
+                '-s',
+                sessionName,
+                '-n',
+                'shell',
+                '-c',
+                getCOWORKPath(),
+                'bash',
+            ]),
+    ]);
+    if (!child) return null;
 
-    const child = spawn(ttydPath, args, {
-        cwd: getCOWORKPath(),
-        detached: true,
-        stdio: 'ignore'
-    });
-    child.unref();
-    cliSessions.set(port, child);
+    cliSessions.set(port, { port, sessionName, process: child, preserveTmux: options?.preserveTmux ?? false });
     return port;
 };
 
+const startExternalTmuxSession = async (sessionName: string, settings = currentCliSettings) => {
+    const existingRecord = Array.from(cliSessions.values()).find((record) => record.sessionName === sessionName);
+    if (existingRecord) return existingRecord.port;
+
+    const port = getNextCliPort();
+    return startCliSession(port, settings, { sessionName, preserveTmux: true, attach: true });
+};
+
 const stopCliSession = async (port: number) => {
-    const child = cliSessions.get(port);
-    if (child) {
+    const record = cliSessions.get(port);
+    if (record) {
+        if (!record.preserveTmux) {
+            try {
+                runTmux(['kill-session', '-t', record.sessionName]);
+            } catch (e) {
+                // Ignore missing or already-closed tmux sessions.
+            }
+        }
+
         try {
-            // Kill the whole process group since ttyd spawns bash
-            if (child.pid) {
-                process.kill(-child.pid, 'SIGKILL');
+            // Kill the whole process group since ttyd keeps the browser terminal open.
+            if (record.process.pid) {
+                process.kill(-record.process.pid, 'SIGKILL');
             }
         } catch (e) {
-            try { process.kill(child.pid!, 'SIGKILL'); } catch (err) {}
+            try {
+                process.kill(record.process.pid!, 'SIGKILL');
+            } catch (err) {}
         }
         cliSessions.delete(port);
         await new Promise(resolve => setTimeout(resolve, 100));
@@ -193,14 +413,14 @@ const stopCliSession = async (port: number) => {
 app.get('/api/workspace/cli/sessions', (req, res) => {
     res.json({
         ports: Array.from(cliSessions.keys()),
-        settings: currentCliSettings
+        settings: currentCliSettings,
+        sessions: collectCliSessionStatuses(),
+        externalSessions: collectExternalTmuxSessionStatuses(),
     });
 });
 
 app.post('/api/workspace/cli/sessions', async (req, res) => {
-    const activePorts = Array.from(cliSessions.keys());
-    const nextPort = activePorts.length === 0 ? 7682 : Math.max(...activePorts) + 1;
-    const port = (nextPort === 61208) ? nextPort + 1 : nextPort;
+    const port = getNextCliPort();
     const started = await startCliSession(port);
     if (started) {
         res.json({ port: started });
@@ -209,14 +429,33 @@ app.post('/api/workspace/cli/sessions', async (req, res) => {
     }
 });
 
+app.post('/api/workspace/cli/external-sessions', async (req, res) => {
+    const sessionName = String(req.body?.sessionName || '').trim();
+    if (!sessionName) {
+        res.status(400).json({ error: 'sessionName is required' });
+        return;
+    }
+
+    const port = await startExternalTmuxSession(sessionName);
+    if (port) {
+        res.json({ port });
+    } else {
+        res.status(500).json({ error: 'Failed to open external tmux session' });
+    }
+});
+
 app.post('/api/workspace/cli/settings', async (req, res) => {
     const settings = req.body;
     currentCliSettings = { ...currentCliSettings, ...settings };
     
     // Restart all sessions with new settings sequentially to avoid port race
-    const activePorts = Array.from(cliSessions.keys());
-    for (const port of activePorts) {
-        await startCliSession(port, currentCliSettings);
+    const activeRecords = Array.from(cliSessions.values());
+    for (const record of activeRecords) {
+        await startCliSession(record.port, currentCliSettings, {
+            sessionName: record.sessionName,
+            preserveTmux: record.preserveTmux,
+            attach: record.preserveTmux,
+        });
     }
     
     res.json({ success: true, settings: currentCliSettings });
@@ -226,6 +465,29 @@ app.delete('/api/workspace/cli/sessions/:port', async (req, res) => {
     const port = parseInt(req.params.port);
     await stopCliSession(port);
     res.json({ success: true });
+});
+
+app.post('/api/workspace/cli/sessions/kill', async (req, res) => {
+    const sessionName = String(req.body?.sessionName || '').trim();
+    if (!sessionName) {
+        res.status(400).json({ error: 'sessionName is required' });
+        return;
+    }
+
+    try {
+        runTmux(['kill-session', '-t', sessionName]);
+        
+        // Also remove from managed sessions if exists
+        const portRecord = Array.from(cliSessions.entries()).find(([, r]) => r.sessionName === sessionName);
+        if (portRecord) {
+            const [port] = portRecord;
+            await stopCliSession(port);
+        }
+
+        res.json({ success: true });
+    } catch (e) {
+        res.status(500).json({ error: 'Failed to kill tmux session' });
+    }
 });
 
 const listAvailableMonitorFolders = (): string[] => {
@@ -721,7 +983,7 @@ const subtractSnapshot = (current: OpencodeUsageSnapshot): OpencodeUsageRow[] =>
 };
 const runOpencodeStatsCommand = (): Promise<string> => {
     return new Promise((resolve, reject) => {
-        execFile('opencode', ['stats', '--models'], { cwd: WORKSPACE_PATH, encoding: 'utf8' }, (error, stdout, stderr) => {
+        execFile('opencode', ['stats', '--models'], { cwd: WORKSPACE_PATH, encoding: 'utf8' }, (error: Error | null, stdout: string, stderr: string) => {
             if (error) {
                 reject(new Error(stderr || error.message || 'Failed to collect opencode stats'));
                 return;

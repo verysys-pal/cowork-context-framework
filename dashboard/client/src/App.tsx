@@ -1,5 +1,4 @@
-import { useState, useEffect, useRef, useCallback, useMemo, type ReactElement } from 'react'
-import Mermaid from './components/Mermaid'
+import { useState, useEffect, useRef, useCallback, useMemo } from 'react'
 import FilePreview from './components/FilePreview'
 import GitHubMarkdown from './components/GitHubMarkdown'
 import './components/MarkdownPreview.css'
@@ -8,8 +7,9 @@ import './App.css'
 import { LinkPage } from './pages/LinkPage'
 import { OpencodeUsagePage } from './pages/OpencodeUsagePage'
 import { CliPage } from './pages/CliPage'
+import type { CliSessionStatus, ExternalTmuxSessionStatus } from './pages/CliPage'
 import { TraceabilityPage } from './pages/TraceabilityPage'
-import { DirectoryPage } from './pages/DirectoryPage'
+import { DirectoryPage, type MiddlePanelMode } from './pages/DirectoryPage'
 import type { GitFile, HistoryItem, WorkspaceConfig, FilePreviewData, OpencodeUsageRow, LinkItem } from './types'
 import {
   DEFAULT_LINKS,
@@ -18,11 +18,13 @@ import {
   readLegacyLinks,
   filterExcludedFiles,
   isExcludedPath,
-  iconForExplorerFile,
-  statusLabelForFile,
   readLinkGroupColors
 } from './utils'
 
+type SidebarDisplayMode = 'full' | 'icons'
+
+const SIDEBAR_DISPLAY_MODE_STORAGE_KEY = 'sidebarDisplayMode'
+const CLI_STATUS_POLL_MS = 2500
 
 function App() {
   const [folders, setFolders] = useState<string[]>([])
@@ -39,12 +41,18 @@ function App() {
   const [monitoringActive, setMonitoringActive] = useState(() => {
     return localStorage.getItem('monitoringActive') === 'true';
   })
+  const [sidebarDisplayMode, setSidebarDisplayMode] = useState<SidebarDisplayMode>(() => {
+    return localStorage.getItem(SIDEBAR_DISPLAY_MODE_STORAGE_KEY) === 'icons' ? 'icons' : 'full'
+  })
 
   // Synchronize localStorage whenever monitoringActive changes
   useEffect(() => {
     localStorage.setItem('monitoringActive', monitoringActive.toString());
   }, [monitoringActive])
-  const [middlePanelMode, setMiddlePanelMode] = useState<'history' | 'navigation'>('history')
+  useEffect(() => {
+    localStorage.setItem(SIDEBAR_DISPLAY_MODE_STORAGE_KEY, sidebarDisplayMode)
+  }, [sidebarDisplayMode])
+  const [middlePanelMode, setMiddlePanelMode] = useState<MiddlePanelMode>('history')
   const [monitorFolderUpdating, setMonitorFolderUpdating] = useState(false)
   const [monitorFolderError, setMonitorFolderError] = useState<string | null>(null)
   const [excludeFolders, setExcludeFolders] = useState<string[]>([])
@@ -53,8 +61,11 @@ function App() {
   const [opencodeUsageLoading, setOpencodeUsageLoading] = useState(true)
   const [opencodeUsageRefreshing, setOpencodeUsageRefreshing] = useState(false)
   const [opencodeUsageError, setOpencodeUsageError] = useState<string | null>(null)
-  const [activeCliTab, setActiveCliTab] = useState<number>(7682)
-  const [cliPorts, setCliPorts] = useState<number[]>([7682])
+  const [activeCliTab, setActiveCliTab] = useState<number | null>(7682)
+  const [cliPorts, setCliPorts] = useState<number[]>([])
+  const [cliSessionStatuses, setCliSessionStatuses] = useState<CliSessionStatus[]>([])
+  const [externalCliPorts, setExternalCliPorts] = useState<number[]>([])
+  const [externalTmuxSessions, setExternalTmuxSessions] = useState<ExternalTmuxSessionStatus[]>([])
   const [cliFontSize, setCliFontSize] = useState<number>(14)
   const [cliBgColor, setCliBgColor] = useState<string>('#0d1117')
   const [cliLineHeight, setCliLineHeight] = useState<number>(1.2)
@@ -98,34 +109,58 @@ function App() {
     return JSON.parse(text)
   }, [API_BASE])
 
+  const syncCliSessions = useCallback(async () => {
+    try {
+      const cliData = await fetchJson('/cli/sessions') as {
+        ports?: number[];
+        settings?: {
+          fontSize?: number;
+          bgColor?: string;
+          lineHeight?: number;
+        };
+        sessions?: CliSessionStatus[];
+        externalSessions?: ExternalTmuxSessionStatus[];
+      }
+
+      const ports = Array.isArray(cliData.ports) ? cliData.ports : []
+
+      setCliPorts(ports)
+      setActiveCliTab((current) => {
+        if (ports.length === 0) return null
+        if (current !== null && ports.includes(current)) return current
+        return ports[0]
+      })
+
+      if (cliData.settings) {
+        setCliFontSize(cliData.settings.fontSize || 14)
+        setCliBgColor(cliData.settings.bgColor || '#0d1117')
+        setCliLineHeight(cliData.settings.lineHeight || 1.2)
+      }
+
+      const sessions = Array.isArray(cliData.sessions) ? cliData.sessions : []
+      setCliSessionStatuses(sessions)
+      setExternalCliPorts(sessions.filter((session: CliSessionStatus) => session.source === 'external').map((session: CliSessionStatus) => session.port))
+      setExternalTmuxSessions(Array.isArray(cliData.externalSessions) ? cliData.externalSessions : [])
+    } catch (error) {
+      console.error('Failed to load CLI sessions:', error)
+    }
+  }, [fetchJson])
+
   const loadWorkspaceData = useCallback(async () => {
     const configData = await fetchJson('/config') as WorkspaceConfig
-    const [foldersResult, historyResult, cliResult, rootFilesResult] = await Promise.allSettled([
+    const [foldersResult, historyResult, rootFilesResult] = await Promise.allSettled([
       fetchJson('/folders'),
       fetchJson('/history'),
-      fetchJson('/cli/sessions'),
       fetchJson('/files?folder=.'),
     ])
 
     const foldersData = foldersResult.status === 'fulfilled' ? foldersResult.value : []
     const historyData = historyResult.status === 'fulfilled' ? historyResult.value : []
-    const cliData = cliResult.status === 'fulfilled' ? cliResult.value : null
     const rootFilesData = rootFilesResult.status === 'fulfilled' ? rootFilesResult.value : []
 
     if (foldersResult.status === 'rejected') console.error('Failed to load folders:', foldersResult.reason)
     if (historyResult.status === 'rejected') console.error('Failed to load history:', historyResult.reason)
-    if (cliResult.status === 'rejected') console.error('Failed to load CLI sessions:', cliResult.reason)
     if (rootFilesResult.status === 'rejected') console.error('Failed to load root files:', rootFilesResult.reason)
-
-    if (cliData && Array.isArray(cliData.ports)) {
-      setCliPorts(cliData.ports);
-      if (cliData.ports.length > 0) setActiveCliTab(cliData.ports[0]);
-      if (cliData.settings) {
-        setCliFontSize(cliData.settings.fontSize || 14);
-        setCliBgColor(cliData.settings.bgColor || '#0d1117');
-        setCliLineHeight(cliData.settings.lineHeight || 1.2);
-      }
-    }
 
     if (configData && Array.isArray(configData.excludeFolders)) {
       setExcludeFolders(configData.excludeFolders)
@@ -230,11 +265,22 @@ function App() {
       .catch(err => console.error('Workspace sync error:', err))
 
     void loadLinks()
+    void syncCliSessions()
 
     return () => {
       cancelled = true
     }
-  }, [loadLinks, loadWorkspaceData])
+  }, [loadLinks, loadWorkspaceData, syncCliSessions])
+
+  useEffect(() => {
+    if (viewMode !== 'cli') return undefined
+
+    const intervalId = window.setInterval(() => {
+      void syncCliSessions()
+    }, CLI_STATUS_POLL_MS)
+
+    return () => window.clearInterval(intervalId)
+  }, [syncCliSessions, viewMode])
 
   useEffect(() => {
     let active = true
@@ -692,6 +738,7 @@ function App() {
       })
       if (!res.ok) throw new Error('Failed to apply settings')
       setCliSettingsApplied(Date.now())
+      void syncCliSessions()
     } catch (err) {
       console.error(err)
     }
@@ -704,6 +751,27 @@ function App() {
       const data = await res.json()
       setCliPorts(prev => [...prev, data.port])
       setActiveCliTab(data.port)
+      void syncCliSessions()
+    } catch (err) {
+      console.error(err)
+    }
+  }
+
+  const handleOpenExternalTmuxSession = async (sessionName: string) => {
+    try {
+      const res = await fetch(`${API_BASE}/cli/external-sessions`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ sessionName }),
+      })
+      if (!res.ok) throw new Error('Failed to open external tmux session')
+      const data = await res.json()
+      if (typeof data.port === 'number') {
+        setCliPorts((prev) => (prev.includes(data.port) ? prev : [...prev, data.port]))
+        setExternalCliPorts((prev) => (prev.includes(data.port) ? prev : [...prev, data.port]))
+        setActiveCliTab(data.port)
+      }
+      void syncCliSessions()
     } catch (err) {
       console.error(err)
     }
@@ -711,16 +779,19 @@ function App() {
 
   const handleRemoveCliSession = async (port: number, event: React.MouseEvent) => {
     event.stopPropagation()
-    if (cliPorts.length <= 1) return
+    const isExternal = externalCliPorts.includes(port)
+    if (cliPorts.length <= 1 && !isExternal) return
     try {
       await fetch(`${API_BASE}/cli/sessions/${port}`, { method: 'DELETE' })
       setCliPorts(prev => {
         const next = prev.filter(p => p !== port)
         if (activeCliTab === port) {
-          setActiveCliTab(next[next.length - 1] || next[0])
+          setActiveCliTab(next[next.length - 1] || next[0] || null)
         }
         return next
       })
+      setExternalCliPorts(prev => prev.filter((item) => item !== port))
+      void syncCliSessions()
     } catch (err) {
       console.error(err)
     }
@@ -759,6 +830,21 @@ function App() {
       })
   }
 
+
+  const handleKillCliSession = async (sessionName: string) => {
+    if (!window.confirm(`Are you sure you want to KILL tmux session "${sessionName}"?`)) return;
+    try {
+      const res = await fetch(`${API_BASE}/cli/sessions/kill`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ sessionName }),
+      });
+      if (!res.ok) throw new Error('Failed to kill session');
+      void syncCliSessions();
+    } catch (err) {
+      console.error(err);
+    }
+  };
 
   const fullFolderPath = useMemo(() => {
     if (!selectedFolder || selectedFolder === '.') return monitorFolder
@@ -799,189 +885,253 @@ function App() {
   const visibleFiles = useMemo(() => (
     filterExcludedFiles(files, excludeFolders)
   ), [excludeFolders, files])
+  const isSidebarCollapsed = sidebarDisplayMode === 'icons'
+  const statusDetail = viewMode === 'directory'
+    ? `${visibleFolders.length} folders · ${visibleFiles.length} files`
+    : viewMode === 'linkPage'
+      ? `${links.length} links`
+      : viewMode === 'opencodeUsage'
+        ? `${opencodeUsage.length} usage rows`
+        : viewMode === 'cli'
+          ? `${cliPorts.length} CLI sessions`
+          : viewMode === 'traceability'
+            ? 'Traceability graph'
+            : 'Workspace overview'
 
   return (
-    <div className={`app-container ${showGlobalPreview || notePanelLinkId ? 'has-preview' : ''}`}>
+    <div className={`app-container ${showGlobalPreview || notePanelLinkId ? 'has-preview' : ''} ${isSidebarCollapsed ? 'sidebar-icons' : ''}`}>
       {/* 1st Column: Folders */}
-      <div className="sidebar">
-        <div className="sidebar-title">Navigation</div>
-        <div
+      <div className={`sidebar ${isSidebarCollapsed ? 'is-collapsed' : ''}`}>
+        <div className="sidebar-header">
+          {!isSidebarCollapsed && <div className="sidebar-title">Navigation</div>}
+          <button
+            type="button"
+            className="sidebar-layout-toggle"
+            onClick={() => {
+              setSidebarDisplayMode((current) => (current === 'full' ? 'icons' : 'full'))
+            }}
+            aria-label={isSidebarCollapsed ? 'Expand sidebar labels' : 'Collapse sidebar to icons'}
+            title={isSidebarCollapsed ? 'Show labels' : 'Icons only'}
+          >
+            {isSidebarCollapsed ? '›' : '‹'}
+          </button>
+        </div>
+        <button
+          type="button"
           className={`nav-item ${viewMode === 'directory' ? 'active' : ''}`}
           onClick={handleOpenDirectoryPage}
+          aria-label="Workspace"
+          title="Workspace"
         >
-          📂 Workspace
-        </div>
+          <span className="nav-item-icon" aria-hidden="true">📂</span>
+          <span className="nav-item-label">Workspace</span>
+        </button>
         <div className="sidebar-spacer" />
-        <div className="nav-item">
-          📊 Progress Overview
+        <div className="nav-item nav-item-static" aria-label="Progress Overview" title="Progress Overview">
+          <span className="nav-item-icon" aria-hidden="true">📊</span>
+          <span className="nav-item-label">Progress Overview</span>
         </div>
-        <div
+        <button
+          type="button"
           className={`nav-item ${viewMode === 'traceability' ? 'active' : ''}`}
           onClick={handleTraceability}
+          aria-label="Traceability Map"
+          title="Traceability Map"
         >
-          🕸️ Traceability Map
-        </div>
-        <div
+          <span className="nav-item-icon" aria-hidden="true">🕸️</span>
+          <span className="nav-item-label">Traceability Map</span>
+        </button>
+        <button
+          type="button"
           className={`nav-item ${viewMode === 'linkPage' ? 'active' : ''}`}
           onClick={handleOpenLinkPage}
+          aria-label="Link 페이지"
+          title="Link 페이지"
         >
-          🔗 Link 페이지
-        </div>
-        <div
+          <span className="nav-item-icon" aria-hidden="true">🔗</span>
+          <span className="nav-item-label">Link 페이지</span>
+        </button>
+        <button
+          type="button"
           className={`nav-item ${viewMode === 'opencodeUsage' ? 'active' : ''}`}
           onClick={handleOpencodeUsage}
+          aria-label="OpenCode Usage"
+          title="OpenCode Usage"
         >
-          🤖 OpenCode Usage
-        </div>
-        <div
+          <span className="nav-item-icon" aria-hidden="true">🤖</span>
+          <span className="nav-item-label">OpenCode Usage</span>
+        </button>
+        <button
+          type="button"
           className={`nav-item ${viewMode === 'cli' ? 'active' : ''}`}
           onClick={() => setViewMode('cli')}
+          aria-label="Terminal CLI"
+          title="Terminal CLI"
         >
-          💻 Terminal CLI
-        </div>
+          <span className="nav-item-icon" aria-hidden="true">💻</span>
+          <span className="nav-item-label">Terminal CLI</span>
+        </button>
       </div>
 
       {/* 2nd Column: Main Content */}
       <div className={`main-content${viewMode === 'cli' ? ' cli-mode' : ''}`}>
-        <div className="dashboard-header">
-          <div>
-            <h1 title={viewMode === 'directory' ? monitorFolder : undefined}>{viewTitle}</h1>
-            <p>{viewDescription}</p>
+        <div className="main-scroll">
+          <div className="dashboard-header">
+            <div>
+              <h1 title={viewMode === 'directory' ? monitorFolder : undefined}>{viewTitle}</h1>
+              <p>{viewDescription}</p>
+            </div>
+            {viewMode === 'opencodeUsage' && (
+              <div className="link-page-card" style={{ maxWidth: '300px', margin: 0, padding: '15px', textAlign: 'center' }}>
+                <div className="sidebar-title" style={{ fontSize: '0.9rem', marginBottom: '12px', textAlign: 'center' }}>External Tools</div>
+                <button
+                  type="button"
+                  className="monitor-folder-button opencode-launch-button"
+                  style={{ width: '100%', height: '32px', fontSize: '0.85rem' }}
+                  disabled={opencodeWebLaunching}
+                  onClick={() => void handleLaunchOpencodeWeb()}
+                >
+                  {opencodeWebLaunching ? '실행 중…' : 'OpenCode Web 실행'}
+                </button>
+                {opencodeWebLaunching && <div className="link-error" style={{ fontSize: '0.75rem', marginTop: '4px' }}>OpenCode Web 실행 중…</div>}
+                {opencodeWebMessage && <div className="link-error" style={{ fontSize: '0.75rem', marginTop: '4px' }}>{opencodeWebMessage}</div>}
+                {opencodeWebError && <div className="link-error" style={{ fontSize: '0.75rem', marginTop: '4px' }}>{opencodeWebError}</div>}
+              </div>
+            )}
           </div>
-          {viewMode === 'opencodeUsage' && (
-            <div className="link-page-card" style={{ maxWidth: '300px', margin: 0, padding: '15px', textAlign: 'center' }}>
-              <div className="sidebar-title" style={{ fontSize: '0.9rem', marginBottom: '12px', textAlign: 'center' }}>External Tools</div>
-              <button
-                type="button"
-                className="monitor-folder-button opencode-launch-button"
-                style={{ width: '100%', height: '32px', fontSize: '0.85rem' }}
-                disabled={opencodeWebLaunching}
-                onClick={() => void handleLaunchOpencodeWeb()}
-              >
-                {opencodeWebLaunching ? '실행 중…' : 'OpenCode Web 실행'}
-              </button>
-              {opencodeWebLaunching && <div className="link-error" style={{ fontSize: '0.75rem', marginTop: '4px' }}>OpenCode Web 실행 중…</div>}
-              {opencodeWebMessage && <div className="link-error" style={{ fontSize: '0.75rem', marginTop: '4px' }}>{opencodeWebMessage}</div>}
-              {opencodeWebError && <div className="link-error" style={{ fontSize: '0.75rem', marginTop: '4px' }}>{opencodeWebError}</div>}
+
+          {viewMode === 'traceability' ? (
+            <TraceabilityPage mermaidChart={mermaidChart} />
+          ) : viewMode === 'directory' ? (
+            <DirectoryPage
+              selectedMonitorFolder={selectedMonitorFolder}
+              monitorFolder={monitorFolder}
+              setSelectedMonitorFolder={setSelectedMonitorFolder}
+              setMonitorFolderInput={setMonitorFolderInput}
+              setMiddlePanelMode={setMiddlePanelMode}
+              handleMonitoringToggle={handleMonitoringToggle}
+              monitoringActive={monitoringActive}
+              monitorFolderUpdating={monitorFolderUpdating}
+              monitorFolderError={monitorFolderError}
+              handleWorkspaceFolderSelect={handleWorkspaceFolderSelect}
+              selectedFolder={selectedFolder}
+              setSelectedFolder={setSelectedFolder}
+              handleMonitorCrumbSelect={handleMonitorCrumbSelect}
+              visibleFolders={visibleFolders}
+              visibleFiles={visibleFiles}
+              selectedHistory={selectedHistory}
+              previewFile={previewFile}
+              setPreviewFile={setPreviewFile}
+              handleFileClick={handleFileClick}
+              middlePanelMode={middlePanelMode}
+              history={history}
+              handleWorkspaceHistorySelect={handleWorkspaceHistorySelect}
+              excludeFolders={excludeFolders}
+              newExcludeFolder={newExcludeFolder}
+              setNewExcludeFolder={setNewExcludeFolder}
+              handleAddExcludeFolder={handleAddExcludeFolder}
+              handleRemoveExcludeFolder={handleRemoveExcludeFolder}
+            />
+          ) : viewMode === 'linkPage' ? (
+            <LinkPage
+              linksLoading={linksLoading}
+              links={links}
+              linksError={linksError}
+              linkTitle={linkTitle}
+              setLinkTitle={setLinkTitle}
+              linkUrl={linkUrl}
+              setLinkUrl={setLinkUrl}
+              linkTag={linkTag}
+              setLinkTag={setLinkTag}
+              handleAddLink={handleAddLink}
+              linkGroupColors={linkGroupColors}
+              handleUpdateLinkGroupColor={handleUpdateLinkGroupColor}
+              activeTagDropdownId={activeTagDropdownId}
+              setActiveTagDropdownId={setActiveTagDropdownId}
+              handleUpdateLinkTag={handleUpdateLinkTag}
+              handleUpdateLinkTagPrompt={handleUpdateLinkTagPrompt}
+              openNoteModal={openNoteModal}
+              handleRemoveLink={handleRemoveLink}
+              linkError={linkError}
+            />
+          ) : viewMode === 'opencodeUsage' ? (
+            <OpencodeUsagePage
+              opencodeUsageLoading={opencodeUsageLoading}
+              opencodeUsage={opencodeUsage}
+              opencodeUsageRefreshing={opencodeUsageRefreshing}
+              opencodeUsageError={opencodeUsageError}
+            />
+          ) : viewMode === 'cli' ? null : (
+            <div className="folder-grid">
+              {Object.entries(
+                visibleFiles.reduce((groups: Record<string, GitFile[]>, file) => {
+                  const dir = file.path?.includes('/') ? file.path.substring(0, file.path.lastIndexOf('/')) : '.';
+                  if (!groups[dir]) groups[dir] = [];
+                  groups[dir].push(file);
+                  return groups;
+                }, {})
+              ).sort(([a], [b]) => a === '.' ? -1 : b === '.' ? 1 : a.localeCompare(b))
+                .map(([dir, dirFiles]) => (
+                  <div key={dir} className="folder-card">
+                    <div className="folder-header">
+                      <span className="folder-icon">📂</span>
+                      <span className="folder-name">{dir === '.' ? '(root)' : dir}</span>
+                      <span className="file-count">{dirFiles.length}</span>
+                    </div>
+                    <div className="folder-file-list">
+                      {dirFiles.map(file => (
+                        <div
+                          key={file.path || file.name}
+                          className="folder-file-item clickable"
+                          onClick={() => handleFileClick(file)}
+                        >
+                          <span className="file-icon">📄</span>
+                          <span className="file-name">{file.name}</span>
+                          {file.status !== 'none' && (
+                            <span className={`file-status status-${file.status.toLowerCase()}`}>{file.status}</span>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                ))}
             </div>
           )}
+
+          {/* Persistent CLI Containers */}
+          <CliPage
+            cliPorts={cliPorts}
+            activeCliTab={activeCliTab}
+            setActiveCliTab={setActiveCliTab}
+            handleRemoveCliSession={handleRemoveCliSession}
+            handleAddCliSession={handleAddCliSession}
+            cliFontSize={cliFontSize}
+            setCliFontSize={setCliFontSize}
+            cliBgColor={cliBgColor}
+            setCliBgColor={setCliBgColor}
+            cliLineHeight={cliLineHeight}
+            setCliLineHeight={setCliLineHeight}
+            handleApplyCliSettings={handleApplyCliSettings}
+            cliSettingsApplied={cliSettingsApplied}
+            cliSessionStatuses={cliSessionStatuses}
+            externalTmuxSessions={externalTmuxSessions}
+            handleOpenExternalTmuxSession={handleOpenExternalTmuxSession}
+            handleKillCliSession={handleKillCliSession}
+            viewMode={viewMode}
+          />
         </div>
-
-        {viewMode === 'traceability' ? (
-          <TraceabilityPage mermaidChart={mermaidChart} />
-        ) : viewMode === 'directory' ? (
-          <DirectoryPage
-            selectedMonitorFolder={selectedMonitorFolder}
-            monitorFolder={monitorFolder}
-            setSelectedMonitorFolder={setSelectedMonitorFolder}
-            setMonitorFolderInput={setMonitorFolderInput}
-            setMiddlePanelMode={setMiddlePanelMode}
-            handleMonitoringToggle={handleMonitoringToggle}
-            monitoringActive={monitoringActive}
-            monitorFolderUpdating={monitorFolderUpdating}
-            monitorFolderError={monitorFolderError}
-            handleWorkspaceFolderSelect={handleWorkspaceFolderSelect}
-            selectedFolder={selectedFolder}
-            setSelectedFolder={setSelectedFolder}
-            handleMonitorCrumbSelect={handleMonitorCrumbSelect}
-            visibleFolders={visibleFolders}
-            visibleFiles={visibleFiles}
-            selectedHistory={selectedHistory}
-            previewFile={previewFile}
-            setPreviewFile={setPreviewFile}
-            handleFileClick={handleFileClick}
-            middlePanelMode={middlePanelMode}
-            history={history}
-            handleWorkspaceHistorySelect={handleWorkspaceHistorySelect}
-            excludeFolders={excludeFolders}
-            newExcludeFolder={newExcludeFolder}
-            setNewExcludeFolder={setNewExcludeFolder}
-            handleAddExcludeFolder={handleAddExcludeFolder}
-            handleRemoveExcludeFolder={handleRemoveExcludeFolder}
-          />
-        ) : viewMode === 'linkPage' ? (
-          <LinkPage
-            linksLoading={linksLoading}
-            links={links}
-            linksError={linksError}
-            linkTitle={linkTitle}
-            setLinkTitle={setLinkTitle}
-            linkUrl={linkUrl}
-            setLinkUrl={setLinkUrl}
-            linkTag={linkTag}
-            setLinkTag={setLinkTag}
-            handleAddLink={handleAddLink}
-            linkGroupColors={linkGroupColors}
-            handleUpdateLinkGroupColor={handleUpdateLinkGroupColor}
-            activeTagDropdownId={activeTagDropdownId}
-            setActiveTagDropdownId={setActiveTagDropdownId}
-            handleUpdateLinkTag={handleUpdateLinkTag}
-            handleUpdateLinkTagPrompt={handleUpdateLinkTagPrompt}
-            openNoteModal={openNoteModal}
-            handleRemoveLink={handleRemoveLink}
-            linkError={linkError}
-          />
-        ) : viewMode === 'opencodeUsage' ? (
-          <OpencodeUsagePage
-            opencodeUsageLoading={opencodeUsageLoading}
-            opencodeUsage={opencodeUsage}
-            opencodeUsageRefreshing={opencodeUsageRefreshing}
-            opencodeUsageError={opencodeUsageError}
-          />
-        ) : viewMode === 'cli' ? null : (
-          <div className="folder-grid">
-            {Object.entries(
-              visibleFiles.reduce((groups: Record<string, GitFile[]>, file) => {
-                const dir = file.path?.includes('/') ? file.path.substring(0, file.path.lastIndexOf('/')) : '.';
-                if (!groups[dir]) groups[dir] = [];
-                groups[dir].push(file);
-                return groups;
-              }, {})
-            ).sort(([a], [b]) => a === '.' ? -1 : b === '.' ? 1 : a.localeCompare(b))
-              .map(([dir, dirFiles]) => (
-                <div key={dir} className="folder-card">
-                  <div className="folder-header">
-                    <span className="folder-icon">📂</span>
-                    <span className="folder-name">{dir === '.' ? '(root)' : dir}</span>
-                    <span className="file-count">{dirFiles.length}</span>
-                  </div>
-                  <div className="folder-file-list">
-                    {dirFiles.map(file => (
-                      <div
-                        key={file.path || file.name}
-                        className="folder-file-item clickable"
-                        onClick={() => handleFileClick(file)}
-                      >
-                        <span className="file-icon">📄</span>
-                        <span className="file-name">{file.name}</span>
-                        {file.status !== 'none' && (
-                          <span className={`file-status status-${file.status.toLowerCase()}`}>{file.status}</span>
-                        )}
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              ))}
+        <div className="status-bar" role="status" aria-live="polite">
+          <div className="status-bar-left">
+            <span className="status-bar-label">Status</span>
+            <span className="status-bar-value">{viewTitle}</span>
           </div>
-        )}
-
-        {/* Persistent CLI Containers */}
-        <CliPage
-          cliPorts={cliPorts}
-          activeCliTab={activeCliTab}
-          setActiveCliTab={setActiveCliTab}
-          handleRemoveCliSession={handleRemoveCliSession}
-          handleAddCliSession={handleAddCliSession}
-          cliFontSize={cliFontSize}
-          setCliFontSize={setCliFontSize}
-          cliBgColor={cliBgColor}
-          setCliBgColor={setCliBgColor}
-          cliLineHeight={cliLineHeight}
-          setCliLineHeight={setCliLineHeight}
-          handleApplyCliSettings={handleApplyCliSettings}
-          cliSettingsApplied={cliSettingsApplied}
-          viewMode={viewMode}
-        />
+          <div className="status-bar-center">{statusDetail}</div>
+          <div className="status-bar-right">
+            <span>{monitoringActive ? 'Monitoring on' : 'Monitoring off'}</span>
+            <span className="status-bar-separator">·</span>
+            <span>{monitorFolder}</span>
+          </div>
+        </div>
       </div>
 
       {/* 4th Column: Preview */}

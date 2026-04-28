@@ -1,8 +1,9 @@
 import type { OpencodeUsageRow } from '../types';
-import { useState, useEffect } from 'react';
+import { useEffect, useState } from 'react';
 
 function MonitorFrame({ title, port }: { title: string; port: number }) {
   const [available, setAvailable] = useState<boolean | null>(null);
+  const [isCollapsed, setIsCollapsed] = useState(false);
 
   useEffect(() => {
     fetch(`/api/port-status?port=${port}`)
@@ -12,16 +13,27 @@ function MonitorFrame({ title, port }: { title: string; port: number }) {
   }, [port]);
 
   return (
-    <div className="usage-monitor-card">
-      <div className="sidebar-title">{title}</div>
-      {available === null && (
+    <div className={`usage-monitor-card ${isCollapsed ? 'is-collapsed' : ''}`}>
+      <div className="usage-monitor-card-header">
+        <div className="sidebar-title">{title}</div>
+        <button
+          type="button"
+          className="usage-monitor-icon-button"
+          onClick={() => setIsCollapsed(value => !value)}
+          aria-expanded={!isCollapsed}
+          aria-label={isCollapsed ? `${title} 열기` : `${title} 접기`}
+        >
+          {isCollapsed ? '⌄' : '▴'}
+        </button>
+      </div>
+      {!isCollapsed && available === null && (
         <div className="monitor-iframe" style={{
           display: 'flex', alignItems: 'center', justifyContent: 'center',
           background: 'rgba(255,255,255,0.03)', color: 'rgba(255,255,255,0.3)',
           fontSize: '0.8rem', borderRadius: '8px',
         }}>확인 중…</div>
       )}
-      {available === false && (
+      {!isCollapsed && available === false && (
         <div className="monitor-iframe" style={{
           display: 'flex', alignItems: 'center', justifyContent: 'center',
           flexDirection: 'column', gap: '8px',
@@ -33,7 +45,7 @@ function MonitorFrame({ title, port }: { title: string; port: number }) {
           <span style={{ fontSize: '0.7rem', opacity: 0.5 }}>:{port}</span>
         </div>
       )}
-      {available === true && (
+      {!isCollapsed && available === true && (
         <iframe
           src={`http://${window.location.hostname}:${port}`}
           className="monitor-iframe"
@@ -64,47 +76,51 @@ export function OpencodeUsagePage({
         {opencodeUsageRefreshing && <span>Refreshing…</span>}
         {opencodeUsageError && <span className="usage-page-error">{opencodeUsageError}</span>}
       </div>
-      <div className="usage-table usage-table-page">
-        <div className="usage-table-header">
-          <span>Model</span>
-          <span>Usage Bar</span>
-          <span>Message</span>
-          <span>In-Tokens</span>
-          <span>Out-Tokens</span>
-          <span>Cache Read</span>
-        </div>
-        {opencodeUsageLoading && <div className="usage-empty">Loading opencode stats…</div>}
-        {!opencodeUsageLoading && opencodeUsageError && <div className="usage-empty">{opencodeUsageError}</div>}
-        {!opencodeUsageLoading && !opencodeUsageError && opencodeUsage.length === 0 && (
-          <div className="usage-empty">No model usage found.</div>
-        )}
-        <div className="usage-rows-container">
-          {!opencodeUsageLoading && !opencodeUsageError && opencodeUsage.length > 0 && (() => {
-            const sortedRows = [...opencodeUsage].sort((a, b) => b.messageValue - a.messageValue)
-            const peakUsage = Math.max(...sortedRows.map(row => row.usageValue), 0)
-            return sortedRows.map(row => {
-              const percentage = peakUsage > 0 ? Math.max(0, Math.min((row.usageValue / peakUsage) * 100, 100)) : 0
-              return (
-                <div key={row.model} className="usage-table-row">
-                  <div className="usage-model" title={row.model}>{row.model}</div>
-                  <div className="usage-bar-cell" aria-label={`${row.model} usage ${percentage.toFixed(0)}%`}>
-                    <div className="usage-bar-track">
-                      <div className="usage-bar-fill" style={{ width: `${percentage}%` }} />
+      <div className="usage-page-layout">
+        <section className="usage-table usage-table-page usage-panel">
+          <div className="usage-table-header">
+            <span>Model</span>
+            <span>Usage Bar</span>
+            <span>Message</span>
+            <span>In-Tokens</span>
+            <span>Out-Tokens</span>
+            <span>Cache Read</span>
+          </div>
+          {opencodeUsageLoading && <div className="usage-empty">Loading opencode stats…</div>}
+          {!opencodeUsageLoading && opencodeUsageError && <div className="usage-empty">{opencodeUsageError}</div>}
+          {!opencodeUsageLoading && !opencodeUsageError && opencodeUsage.length === 0 && (
+            <div className="usage-empty">No model usage found.</div>
+          )}
+          <div className="usage-rows-container">
+            {!opencodeUsageLoading && !opencodeUsageError && opencodeUsage.length > 0 && (() => {
+              const sortedRows = [...opencodeUsage].sort((a, b) => b.messageValue - a.messageValue)
+              const peakUsage = Math.max(...sortedRows.map(row => row.usageValue), 0)
+              return sortedRows.map(row => {
+                const percentage = peakUsage > 0 ? Math.max(0, Math.min((row.usageValue / peakUsage) * 100, 100)) : 0
+                return (
+                  <div key={row.model} className="usage-table-row">
+                    <div className="usage-model" title={row.model}>{row.model}</div>
+                    <div className="usage-bar-cell" aria-label={`${row.model} usage ${percentage.toFixed(0)}%`}>
+                      <div className="usage-bar-track">
+                        <div className="usage-bar-fill" style={{ width: `${percentage}%` }} />
+                      </div>
                     </div>
+                    <div className="usage-metric">{row.message}</div>
+                    <div className="usage-metric">{row.inTokens}</div>
+                    <div className="usage-metric">{row.outTokens}</div>
+                    <div className="usage-metric">{row.cacheRead}</div>
                   </div>
-                  <div className="usage-metric">{row.message}</div>
-                  <div className="usage-metric">{row.inTokens}</div>
-                  <div className="usage-metric">{row.outTokens}</div>
-                  <div className="usage-metric">{row.cacheRead}</div>
-                </div>
-              )
-            })
-          })()}
-        </div>
-      </div>
-      <div className="usage-monitor-grid">
-        <MonitorFrame title="GPU Monitor (nvtop)" port={7681} />
-        <MonitorFrame title="System Monitor (glances)" port={61208} />
+                )
+              })
+            })()}
+          </div>
+        </section>
+        <section className="usage-monitor-column">
+          <div className="usage-monitor-stack">
+            <MonitorFrame title="GPU Monitor (nvtop)" port={7681} />
+            <MonitorFrame title="CPU Monitor (glances)" port={61208} />
+          </div>
+        </section>
       </div>
     </div>
   );

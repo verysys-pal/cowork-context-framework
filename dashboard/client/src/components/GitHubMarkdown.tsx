@@ -1,5 +1,6 @@
 import ReactMarkdown, { type Components } from 'react-markdown'
 import remarkGfm from 'remark-gfm'
+import rehypeRaw from 'rehype-raw'
 import Mermaid from './Mermaid'
 
 interface GitHubMarkdownProps {
@@ -30,7 +31,11 @@ const markdownComponents: Components = {
 
 function GitHubMarkdown({ content }: GitHubMarkdownProps) {
   return (
-    <ReactMarkdown remarkPlugins={[remarkGfm]} components={markdownComponents}>
+    <ReactMarkdown 
+      remarkPlugins={[remarkGfm]} 
+      rehypePlugins={[rehypeRaw]}
+      components={markdownComponents}
+    >
       {content}
     </ReactMarkdown>
   )
