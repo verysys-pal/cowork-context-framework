@@ -101,17 +101,6 @@ export function CliPage({
               Session {idx + 1}
               <div className="cli-tab-actions">
                 <span className="cli-tab-close" onClick={(e) => handleRemoveCliSession(port, e)} title="Close Tab">×</span>
-                <span 
-                  className="cli-tab-kill" 
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    const status = cliSessionStatuses.find(s => s.port === port);
-                    if (status) handleKillCliSession(status.sessionName);
-                  }} 
-                  title="Kill Session"
-                >
-                  💀
-                </span>
               </div>
             </div>
           ))}

@@ -1878,6 +1878,23 @@
   line-height: 1;
 }
 
+.workspace-start-btn.is-monitoring {
+  background: rgba(34, 197, 94, 0.2);
+  border-color: rgba(34, 197, 94, 0.4);
+  color: #4ade80;
+}
+
+.workspace-upload-btn {
+  background: rgba(20, 184, 166, 0.1);
+  border-color: rgba(20, 184, 166, 0.2);
+  color: #5eead4;
+}
+
+.workspace-upload-btn:hover {
+  background: rgba(20, 184, 166, 0.2);
+  border-color: rgba(20, 184, 166, 0.4);
+}
+
 .cli-status-card-open {
   background: rgba(59, 130, 246, 0.12);
   border-color: rgba(59, 130, 246, 0.25);
@@ -2084,8 +2101,7 @@
   gap: 6px;
 }
 
-.cli-tab-close,
-.cli-tab-kill {
+.cli-tab-close {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -2100,11 +2116,6 @@
 .cli-tab-close:hover {
   background: rgba(239, 68, 68, 0.2);
   color: #f87171;
-}
-
-.cli-tab-kill:hover {
-  background: rgba(239, 68, 68, 0.3);
-  transform: scale(1.15);
 }
 
 .cli-tab:hover {

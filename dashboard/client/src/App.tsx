@@ -846,6 +846,36 @@ function App() {
     }
   };
 
+  const handleFileUpload = async (file: File) => {
+    try {
+      const formData = new FormData();
+      formData.append('file', file);
+      
+      const url = new URL(`${API_BASE}/upload`, window.location.origin);
+      url.searchParams.append('targetPath', fullFolderPath);
+      
+      const res = await fetch(url.toString(), {
+        method: 'POST',
+        body: formData,
+      });
+
+      if (!res.ok) {
+        const errorData = await res.json();
+        throw new Error(errorData.error || 'Upload failed');
+      }
+      
+      const data = await res.json();
+      console.log('Uploaded:', data);
+      
+      // Refresh visible files
+      handleWorkspaceFolderSelect(selectedFolder || '.');
+      alert(`Successfully uploaded "${file.name}"`);
+    } catch (err: any) {
+      console.error(err);
+      alert(`Upload Error: ${err.message}`);
+    }
+  };
+
   const fullFolderPath = useMemo(() => {
     if (!selectedFolder || selectedFolder === '.') return monitorFolder
     if (selectedFolder.startsWith('/')) return selectedFolder
@@ -869,7 +899,7 @@ function App() {
   const viewDescription = viewMode === 'traceability'
     ? 'Visualizing organic connections between project Registry files'
     : viewMode === 'directory'
-      ? 'Change the monitored workspace and review recent changes in one place'
+      ? `Current Path: ${fullFolderPath} (Upload Destination)`
       : viewMode === 'linkPage'
         ? '사용자가 직접 링크와 마크다운 메모를 관리하는 페이지입니다.'
         : viewMode === 'opencodeUsage'
@@ -1006,8 +1036,6 @@ function App() {
             <DirectoryPage
               selectedMonitorFolder={selectedMonitorFolder}
               monitorFolder={monitorFolder}
-              setSelectedMonitorFolder={setSelectedMonitorFolder}
-              setMonitorFolderInput={setMonitorFolderInput}
               setMiddlePanelMode={setMiddlePanelMode}
               handleMonitoringToggle={handleMonitoringToggle}
               monitoringActive={monitoringActive}
@@ -1031,6 +1059,7 @@ function App() {
               setNewExcludeFolder={setNewExcludeFolder}
               handleAddExcludeFolder={handleAddExcludeFolder}
               handleRemoveExcludeFolder={handleRemoveExcludeFolder}
+              handleFileUpload={handleFileUpload}
             />
           ) : viewMode === 'linkPage' ? (
             <LinkPage

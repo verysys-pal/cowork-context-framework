@@ -7,6 +7,7 @@ import { execFile, execFileSync, execSync, spawn, type ChildProcess } from 'chil
 import net from 'net';
 import os from 'os';
 import { fileURLToPath } from 'url';
+import multer from 'multer';
 import { parseTraceability, generateMermaid } from './traceability.js';
 
 dotenv.config();
@@ -31,6 +32,29 @@ app.get('/', (req, res) => {
 });
 
 app.get('/favicon.ico', (req, res) => res.status(204).end());
+
+const storage = multer.diskStorage({
+    destination: (req, file, cb) => {
+        // Use targetPath from query if available, otherwise fallback to currentMonitorFolder
+        const targetDir = (req.query.targetPath as string) || currentMonitorFolder;
+        
+        // Ensure the directory exists
+        if (!fs.existsSync(targetDir)) {
+            try {
+                fs.mkdirSync(targetDir, { recursive: true });
+            } catch (err) {
+                console.error('Failed to create destination directory:', err);
+            }
+        }
+        cb(null, targetDir);
+    },
+    filename: (req, file, cb) => {
+        // Use original filename but handle potential naming conflicts maybe?
+        // For now, overwrite or let OS/Multer handle it.
+        cb(null, file.originalname);
+    }
+});
+const upload = multer({ storage });
 
 const WORKSPACE_PATH = path.resolve(__dirname, '../../');
 const HOME_PATH = os.homedir();
@@ -488,6 +512,38 @@ app.post('/api/workspace/cli/sessions/kill', async (req, res) => {
     } catch (e) {
         res.status(500).json({ error: 'Failed to kill tmux session' });
     }
+});
+
+app.post('/api/workspace/upload', (req, res) => {
+    // Check if destination directory exists before handling upload
+    if (!fs.existsSync(currentMonitorFolder)) {
+        console.error('Upload failed: destination directory does not exist:', currentMonitorFolder);
+        res.status(500).json({ error: 'Target directory does not exist: ' + currentMonitorFolder });
+        return;
+    }
+
+    upload.single('file')(req, res, (err) => {
+        if (err instanceof multer.MulterError) {
+            console.error('Multer error:', err);
+            res.status(500).json({ error: 'Multer error: ' + err.message });
+            return;
+        } else if (err) {
+            console.error('Upload Error:', err);
+            res.status(500).json({ error: 'Internal upload error: ' + err.message });
+            return;
+        }
+
+        if (!req.file) {
+            res.status(400).json({ error: 'No file uploaded' });
+            return;
+        }
+
+        res.json({ 
+            message: 'File uploaded successfully', 
+            filename: req.file.filename,
+            path: req.file.path
+        });
+    });
 });
 
 const listAvailableMonitorFolders = (): string[] => {
@@ -1146,9 +1202,6 @@ app.get('/api/workspace/files', (req, res) => {
     const monitorRoot = getCOWORKPath();
     const folderPath = path.isAbsolute(folder as string) ? (folder as string) : path.resolve(monitorRoot, folder as string);
 
-    if (isHomeDirectory(monitorRoot)) {
-        return res.json([]);
-    }
     
     // Check home directory boundary
     const relativeToHome = path.relative(HOME_PATH, folderPath);
@@ -1177,7 +1230,10 @@ app.get('/api/workspace/files', (req, res) => {
                     if (shouldSkipDirectory(entry.name)) {
                         continue;
                     }
-                    scanDir(fullPath);
+                    // Only recurse if we are NOT at the Home Directory root
+                    if (!isHomeDirectory(monitorRoot)) {
+                        scanDir(fullPath);
+                    }
                     if (fileList.length >= MAX_SCAN_FILES) return;
                 } else {
                     const folderRelativePath = path.relative(folderPath, fullPath);
@@ -1209,9 +1265,6 @@ app.get('/api/workspace/history', (req, res) => {
             return res.json([]);
         }
 
-        if (isHomeDirectory(monitorPath)) {
-            return res.json([]);
-        }
 
         const files: { name: string; path: string; mtime: Date }[] = [];
         
@@ -1233,7 +1286,10 @@ app.get('/api/workspace/history', (req, res) => {
                         continue;
                     }
 
-                    scan(fullPath);
+                    // Only recurse if we are NOT at the Home Directory root
+                    if (!isHomeDirectory(monitorPath)) {
+                        scan(fullPath);
+                    }
                     if (files.length >= MAX_SCAN_FILES) return;
                 } else {
                     try {

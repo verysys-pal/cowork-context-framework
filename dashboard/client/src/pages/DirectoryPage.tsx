@@ -8,8 +8,6 @@ export type MiddlePanelMode = 'history' | 'navigation' | 'hidden';
 export interface DirectoryPageProps {
   selectedMonitorFolder: string;
   monitorFolder: string;
-  setSelectedMonitorFolder: (v: string) => void;
-  setMonitorFolderInput: (v: string) => void;
   setMiddlePanelMode: (v: MiddlePanelMode) => void;
   handleMonitoringToggle: () => void;
   monitoringActive: boolean;
@@ -33,13 +31,12 @@ export interface DirectoryPageProps {
   setNewExcludeFolder: (v: string) => void;
   handleAddExcludeFolder: () => void;
   handleRemoveExcludeFolder: (folder: string) => void;
+  handleFileUpload: (file: File) => void;
 }
 
 export function DirectoryPage({
   selectedMonitorFolder,
   monitorFolder,
-  setSelectedMonitorFolder,
-  setMonitorFolderInput,
   setMiddlePanelMode,
   handleMonitoringToggle,
   monitoringActive,
@@ -63,6 +60,7 @@ export function DirectoryPage({
   setNewExcludeFolder,
   handleAddExcludeFolder,
   handleRemoveExcludeFolder,
+  handleFileUpload,
 }: DirectoryPageProps): ReactElement {
   const showNavigationMode = middlePanelMode === 'navigation' && !monitoringActive
   const showHiddenMode = middlePanelMode === 'hidden' && !monitoringActive
@@ -75,23 +73,7 @@ export function DirectoryPage({
           <span>•••</span>
         </div>
         <div className="workspace-directory-controls">
-          <div className="workspace-nav-info">
-            <div className="workspace-target-label">Target: <span className="workspace-current-base">{selectedMonitorFolder}</span></div>
-          </div>
           <div className="workspace-top-actions">
-            <button
-              type="button"
-              className="monitor-folder-button workspace-select-btn"
-              onClick={() => {
-                  const target = selectedFolder || monitorFolder;
-                  setSelectedMonitorFolder(target);
-                  setMonitorFolderInput(target === '.' ? monitorFolder : target);
-                  setMiddlePanelMode('navigation');
-              }}
-              title="현재 보시는 폴더를 대상으로 선택합니다"
-            >
-              📁 Folder Select
-            </button>
             <button
               type="button"
               className={`monitor-folder-button workspace-start-btn ${monitoringActive ? 'is-monitoring' : ''}`}
@@ -100,6 +82,24 @@ export function DirectoryPage({
               title={monitoringActive ? 'Click to Stop Monitoring' : 'Click to Start Monitoring'}
             >
               {monitoringActive ? ' Monitoring Active' : '🚀 Monitoring Start'}
+            </button>
+            <input
+              type="file"
+              id="workspace-file-upload-input"
+              style={{ display: 'none' }}
+              onChange={(e) => {
+                const file = e.target.files?.[0];
+                if (file) handleFileUpload(file);
+                e.target.value = '';
+              }}
+            />
+            <button
+              type="button"
+              className="monitor-folder-button workspace-upload-btn"
+              onClick={() => document.getElementById('workspace-file-upload-input')?.click()}
+              title="현재 작업중인 폴더로 파일을 업로드합니다"
+            >
+              📎 Upload
             </button>
           </div>
         </div>
@@ -144,7 +144,7 @@ export function DirectoryPage({
             >
               <span className="workspace-chevron">{selectedFolder === '.' ? '⌄' : '›'}</span>
               <span className="workspace-folder-icon">▸</span>
-              <span className="workspace-tree-name">{monitorFolder.split('/').filter(Boolean).pop() || monitorFolder}</span>
+              <span className="workspace-tree-name">{(selectedFolder && selectedFolder !== '.') ? selectedFolder.split('/').filter(Boolean).pop() : (monitorFolder.split('/').filter(Boolean).pop() || monitorFolder)}</span>
             </button>
 
             {visibleFolders.filter(folder => folder !== '.' && !folder.startsWith('..')).map(folder => (
@@ -152,6 +152,7 @@ export function DirectoryPage({
                 type="button"
                 key={folder}
                 className={`workspace-tree-row ${selectedFolder === folder ? 'active' : ''}`}
+                style={{ paddingLeft: '24px' }}
                 onClick={() => handleWorkspaceFolderSelect(folder)}
               >
                 <span className="workspace-chevron">{selectedFolder === folder ? '⌄' : '›'}</span>
